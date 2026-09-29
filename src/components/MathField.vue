@@ -114,9 +114,12 @@ const selectionStyle = ref<Record<string, string> | null>(null)
 // of √x the caret is either still under the root (tinted) or after it (not).
 const rowTintStyle = ref<Record<string, string> | null>(null)
 const markBoxes = ref<Array<{ box: SelectionBox; message: string; kind: MarkKind }>>([])
-// The mark under the pointer, positioned in client coordinates (the tooltip
-// is position: fixed so the field's horizontal scrolling doesn't clip it).
+// The mark under the pointer. Its tooltip is position: fixed, so the field's
+// horizontal scrolling doesn't clip it, and placed from where a fixed
+// element's left: 0; top: 0 actually is (fixedOriginEl): a transformed host,
+// such as a PrimeVue Dialog, places fixed elements rather than the viewport.
 const hoveredMark = ref<{ message: string; left: number; top: number } | null>(null)
+const fixedOriginEl = ref<HTMLElement | null>(null)
 // Bumped on every move so the blink animation restarts and the caret is
 // visible straight after moving.
 const caretKey = ref(0)
@@ -164,6 +167,9 @@ const showRowTint = computed(() => props.active && focused.value && rowTintStyle
 
 const showSelection = computed(() => props.active && selectionStyle.value !== null)
 
+// Measured after every redraw, on resize, and when the pointer enters the
+// field: its layout may have changed since without either (a host's font
+// size, a pane resized, a dialog's opening animation).
 function updateOverlays() {
   const container = surfaceEl.value
   const box = container ? caretBox(container, props.modelValue, props.cursor) : null
@@ -235,12 +241,13 @@ function handleHover(event: MouseEvent) {
   )
   // A problem's message rather than a hint, where both apply.
   const hit = under.find((mark) => mark.kind !== 'hint') ?? under[0]
+  const origin = fixedOriginEl.value?.getBoundingClientRect() ?? { left: 0, top: 0 }
 
   hoveredMark.value = hit
     ? {
         message: hit.message,
-        left: base.left + hit.box.left - container.scrollLeft,
-        top: base.top + hit.box.top + hit.box.height + 6 - container.scrollTop,
+        left: base.left + hit.box.left - container.scrollLeft - origin.left,
+        top: base.top + hit.box.top + hit.box.height + 6 - container.scrollTop - origin.top,
       }
     : null
 }
@@ -499,6 +506,7 @@ defineExpose({ focus: () => surfaceEl.value?.focus() })
     :aria-invalid="marks.some(isProblem) || undefined"
     @keydown="handleKeydown"
     @mousedown="handleMousedown"
+    @mouseenter="updateOverlays"
     @mousemove="handleHover"
     @mouseleave="hoveredMark = null"
     @focus="focused = true"
@@ -527,6 +535,7 @@ defineExpose({ focus: () => surfaceEl.value?.focus() })
     >
       {{ hoveredMark.message }}
     </div>
+    <span ref="fixedOriginEl" class="fixed-origin" aria-hidden="true"></span>
   </div>
 </template>
 
@@ -629,6 +638,16 @@ defineExpose({ focus: () => surfaceEl.value?.focus() })
   bottom: 0.52em;
   border-top: 0.22em solid #60a5fa;
   border-left: 0.22em solid transparent;
+}
+
+.fixed-origin {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .mark-tip {

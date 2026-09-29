@@ -126,6 +126,39 @@ test('variable and number units show on hover, without underlines', async () => 
   await expect(wb.markTip()).toHaveText('2: s')
 })
 
+test('the hover tip sits under its glyph inside a transformed host', async () => {
+  // As a PrimeVue Dialog is: transformed, so it (not the viewport) places
+  // position: fixed descendants, and away from the viewport's corner.
+  await wb.page.evaluate(() => {
+    Object.assign(document.querySelector<HTMLElement>('#app')!.style, {
+      transform: 'scale(1)',
+      willChange: 'transform',
+      margin: '120px 0 0 200px',
+    })
+  })
+  await wb.type('x=v*2{s}')
+  await setUnits({ variableUnits: { v: 'metre_per_second' } })
+
+  const hoverV = async () => {
+    const v = await wb.atomBox(0, 'r', 2)
+    await wb.page.mouse.move((v.left + v.right) / 2, (v.top + v.bottom) / 2)
+    await expect(wb.markTip()).toHaveText('v: metre_per_second')
+    // Just under the glyph: its mark's box is padded by 1, the tip 6 below.
+    const tip = (await wb.markTip().boundingBox())!
+    expect(Math.abs(tip.x - (v.left - 1))).toBeLessThanOrEqual(3)
+    expect(Math.abs(tip.y - (v.bottom + 7))).toBeLessThanOrEqual(3)
+  }
+  await hoverV()
+
+  // The layout inside the field changes, with no resize or redraw: the
+  // boxes are measured again when the pointer comes back.
+  await wb.page.mouse.move(0, 0)
+  await wb.page.evaluate(() =>
+    document.querySelector<HTMLElement>('#app')!.style.setProperty('--me-line-font-size', '1.8rem'),
+  )
+  await hoverV()
+})
+
 test('a number’s units show while typed, then hide, showing on hover', async () => {
   await wb.type('k=0.25{')
   // An empty units slot of its own kind, labelled "units".
