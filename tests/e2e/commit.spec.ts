@@ -210,9 +210,23 @@ test('the toolbar stays in view as the lines scroll', async ({ page }) => {
   await box.evaluate((el) => (el.scrollTop = el.scrollHeight))
 
   const scroller = (await box.boundingBox())!
-  const toolbar = (await page.locator('.toolbar').boundingBox())!
+  const toolbarEl = page.locator('.toolbar')
+  const toolbar = (await toolbarEl.boundingBox())!
   expect(toolbar.y).toBeCloseTo(scroller.y, 0)
   await expect(page.locator('[data-role="toolbar-fraction"]')).toBeInViewport()
+
+  // Stuck, it covers the panel between its side borders and draws its top
+  // edge: no line shows beside or above it.
+  await expect(toolbarEl).toHaveClass(/\bstuck\b/)
+  const panel = (await page.locator('.editor-panel').boundingBox())!
+  expect(toolbar.x).toBeCloseTo(panel.x + 1, 0)
+  expect(toolbar.width).toBeCloseTo(panel.width - 2, 0)
+  const topColor = await toolbarEl.evaluate((el) => getComputedStyle(el).borderTopColor)
+  expect(topColor).not.toBe('rgba(0, 0, 0, 0)')
+
+  // Back at the top, the panel's own edge shows again.
+  await box.evaluate((el) => (el.scrollTop = 0))
+  await expect(toolbarEl).not.toHaveClass(/\bstuck\b/)
 })
 
 test('autofocus: in a dialog, the active line has the focus', async ({ page }) => {

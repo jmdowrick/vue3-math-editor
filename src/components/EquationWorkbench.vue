@@ -32,7 +32,7 @@
 //   except what is only missing on the line being typed; 'commit' marks a
 //   line's problems once it is committed.
 // - `readonly`, `autofocus` and `debug` (the cursor readout) props.
-import { computed, nextTick, onMounted, ref, shallowRef, toRaw, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, toRaw, watch } from 'vue'
 import katex from 'katex'
 import Button from 'primevue/button'
 import Card from 'primevue/card'
@@ -339,8 +339,36 @@ function setMathML(xml: string): MathMLImport {
 
 defineExpose({ setMathML, focus: focusActive })
 
+// Whether the sticky toolbar is stuck: its top has left the panel's, so the
+// panel's top edge has scrolled away and the toolbar draws it instead. Any
+// scroller may move it (the page, a dialog, a host's box), so every scroll is
+// heard, on capture, and measured at most once a frame.
+const panelEl = ref<HTMLElement | null>(null)
+const toolbarEl = ref<HTMLElement | null>(null)
+const toolbarStuck = ref(false)
+let stuckFrame = 0
+function updateStuck() {
+  stuckFrame = 0
+  if (!panelEl.value || !toolbarEl.value) return
+  const offset =
+    toolbarEl.value.getBoundingClientRect().top - panelEl.value.getBoundingClientRect().top
+  toolbarStuck.value = offset > 0.5
+}
+function scheduleStuck() {
+  if (!stuckFrame) stuckFrame = requestAnimationFrame(updateStuck)
+}
+
 onMounted(() => {
   if (props.autofocus) focusActive()
+  document.addEventListener('scroll', scheduleStuck, { capture: true, passive: true })
+  window.addEventListener('resize', scheduleStuck, { passive: true })
+  updateStuck()
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('scroll', scheduleStuck, { capture: true })
+  window.removeEventListener('resize', scheduleStuck)
+  if (stuckFrame) cancelAnimationFrame(stuckFrame)
 })
 
 // Run a command on the active line (toolbar buttons, command mode).
@@ -845,9 +873,15 @@ function toggleCopyMenu(event: Event) {
     :class="{ 'has-side': !!$slots.side, 'no-outputs': !outputs, readonly }"
     @keydown.capture="handleCaptureKeydown"
   >
-    <div class="editor-panel">
+    <div ref="panelEl" class="editor-panel">
       <!-- Sticky: it stays in view while the lines scroll under it. -->
-      <div class="toolbar" role="toolbar" aria-label="Equation tools">
+      <div
+        ref="toolbarEl"
+        class="toolbar"
+        :class="{ stuck: toolbarStuck }"
+        role="toolbar"
+        aria-label="Equation tools"
+      >
         <div class="toolbar-group">
           <button
             v-for="group in TOOLBAR"
@@ -1191,10 +1225,22 @@ function toggleCopyMenu(event: Event) {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.35rem 0.75rem;
-  margin: 0 0 0.6rem;
-  padding: 0.5rem 0;
+  /* Over the panel's side padding, so no line shows beside it, and over its
+     top border, which it draws itself once stuck (the transparent border lets
+     the panel's show through until then). */
+  margin: -1px -1rem 0.6rem;
+  padding: 0.5rem 1rem;
+  border-top: 1px solid transparent;
   border-bottom: 1px solid var(--me-border);
+  border-radius: calc(0.75rem - 1px) calc(0.75rem - 1px) 0 0;
   background: var(--me-surface);
+  background-clip: padding-box;
+}
+
+/* Stuck: the panel's top edge has scrolled away. */
+.toolbar.stuck {
+  border-top-color: var(--me-border);
+  border-radius: 0;
 }
 
 .toolbar-group {
