@@ -89,10 +89,12 @@ describe('names with Greek letters', () => {
 
   it('copies as LaTeX the way it is shown, and pastes back as the same name', () => {
     const root = press(type('alpha_m*tau'), '+').root.slice(0, -1)
-    expect(rowToLatexSource(root)).toBe('\\alpha \\_m\\cdot \\tau')
+    expect(rowToLatexSource(root)).toBe('\\alpha_{m}\\cdot \\tau')
     expect(rowToLatexSource(root, { greekNames: false })).toBe(
-      '\\mathit{alpha\\_m}\\cdot \\mathit{tau}',
+      '\\mathit{alpha}_{m}\\cdot \\mathit{tau}',
     )
+    expect(rowToLatexSource(root, { typesetNames: false })).toBe('\\alpha \\_m\\cdot \\tau')
+    expect(names(latexToRow('\\alpha_{m}'))).toEqual(['alpha_m'])
     expect(names(latexToRow('\\alpha \\_m'))).toEqual(['alpha_m'])
   })
 

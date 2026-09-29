@@ -130,7 +130,8 @@ test('the LaTeX panel shows the same LaTeX as copying', async () => {
   await wb.type('Vm_init=2Vm*sin(t)')
   await wb.press('End')
   await wb.type('+1/x')
-  const expected = '\\mathit{Vm\\_init}=2\\mathit{Vm}\\cdot \\sin \\left(t\\right)+\\frac{1}{x}'
+  const expected =
+    '\\mathit{Vm}_{\\mathit{init}}=2\\mathit{Vm}\\cdot \\sin \\left(t\\right)+\\frac{1}{x}'
   await expect(panel).toHaveText(expected)
 
   await copyAs('LaTeX')

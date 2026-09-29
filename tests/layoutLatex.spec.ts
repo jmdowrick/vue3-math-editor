@@ -119,6 +119,63 @@ describe('rowToLatex', () => {
     )
   })
 
+  it('typesets the subscripts and superscripts of a name', () => {
+    const [g, u1, k, r, u2, u3, m, a, x] = row('g_Kr__max')
+    const tagged = (atom: Atom, body: string) => `\\htmlData{atom=${atom.id}}{${body}}`
+    const latex = rowToLatex([g, u1, k, r, u2, u3, m, a, x])
+    expect(latex).toContain(
+      `{{${tagged(g, 'g')}}_{${tagged(u1, '')}${tagged(k, '\\mathit{K}')}${tagged(r, '\\mathit{r}')}}` +
+        `^{${tagged(u2, '')}${tagged(u3, '')}${tagged(m, '\\mathit{m}')}${tagged(a, '\\mathit{a}')}${tagged(x, '\\mathit{x}')}}}`,
+    )
+
+    // A second part's underscore is drawn as the comma.
+    const [c, s1, ca, cb, s2, i] = row('C_Ca_i')
+    expect(rowToLatex([c, s1, ca, cb, s2, i])).toContain(
+      `_{${tagged(s1, '')}${tagged(ca, '\\mathit{C}')}${tagged(cb, '\\mathit{a}')}${tagged(s2, ',')}${tagged(i, 'i')}}`,
+    )
+
+    expect(rowToLatex([symbol('alpha'), ...row('_m')])).toContain('{\\alpha}}_{')
+
+    // A number part upright, as a number.
+    const [, , one, two] = row('x_12')
+    expect(rowToLatex(row('x_').concat([one, two]))).toContain(
+      `${tagged(one, '1')}${tagged(two, '2')}`,
+    )
+
+    for (const name of ['g_Kr__max', 'C_Ca_i', 'x__a__b_c_d', 'Vm_init']) {
+      const tree = row(name, superscript(row('2')))
+      expect(() =>
+        katex.renderToString(rowToLatex(tree), { ...KATEX_EDITOR_OPTIONS, throwOnError: true }),
+      ).not.toThrow()
+    }
+  })
+
+  it('draws a name as typed while it is being edited, or with typesetting off', () => {
+    const tree = row('V_m+1')
+    const typeset = rowToLatex(tree)
+    expect(typeset).not.toContain('\\_')
+    expect(rowToLatex(tree, { typesetNames: false })).toContain('\\_')
+    for (const offset of [0, 2, 3]) {
+      expect(rowToLatex(tree, { cursors: [{ path: [], offset }] }), `${offset}`).toContain('\\_')
+    }
+    expect(rowToLatex(tree, { cursors: [{ path: [], offset: 5 }, null] })).toBe(typeset)
+    // In another row: not this name.
+    expect(rowToLatex(tree, { cursors: [{ path: [{ atom: 0, branch: 'sup' }], offset: 0 }] })).toBe(
+      typeset,
+    )
+    // Three underscores in a row, or one at the end.
+    expect(rowToLatex(row('a___b'))).toContain('\\_')
+    expect(rowToLatex(row('V_'))).toContain('\\_')
+  })
+
+  it('attaches an exponent to a whole typeset name', () => {
+    const tree = row('V_m', superscript(row('2')))
+    const sup = tree[3]
+    const latex = rowToLatex(tree)
+    expect(latex).toMatch(/^\\htmlData\{row=r\}\{\{\{\{/)
+    expect(latex).toContain(`}}}^{\\htmlData{atom=${sup.id}}`)
+  })
+
   it('renders greek names, other words and unusual glyphs', () => {
     expect(rowToLatex([symbol('alpha')])).toContain('{\\alpha}')
     expect(rowToLatex([symbol('speed')])).toContain('{\\mathit{speed}}')

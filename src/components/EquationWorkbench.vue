@@ -85,6 +85,10 @@ const props = withDefaults(
     // (α, τ_m), however they were typed; off, Greek letters are spelled out.
     // Either way the names are the same (editor/names.ts).
     greekNames?: boolean
+    // Names with their subscripts and superscripts typeset: g_Kr__max as g
+    // with Kr below and max above (editor/nameScripts.ts); off, as typed.
+    // Either way the names are the same.
+    typesetNames?: boolean
     // The Content MathML, MathJSON, LaTeX and AST panels, and "Copy as".
     outputs?: boolean
     // The workbench's own undo/redo: off, nothing is recorded, the buttons are
@@ -107,6 +111,7 @@ const props = withDefaults(
     issues: () => [],
     variableUnits: undefined,
     greekNames: true,
+    typesetNames: true,
     outputs: true,
     history: true,
     validate: 'input',
@@ -121,7 +126,11 @@ const emit = defineEmits<{
   'line-commit': [line: EquationLine, info: LineCommitInfo]
 }>()
 
-const exportOptions = computed(() => ({ cellml: props.cellml, greekNames: props.greekNames }))
+const exportOptions = computed(() => ({
+  cellml: props.cellml,
+  greekNames: props.greekNames,
+  typesetNames: props.typesetNames,
+}))
 
 const equations = ref<EditorState[]>([emptyState()])
 // Each line's id, parallel to `equations`: stable while the line exists, so a
@@ -953,6 +962,7 @@ function toggleCopyMenu(event: Event) {
             :autofocus="autofocus && index === activeIndex ? true : undefined"
             :marks="lineMarks[index]"
             :greek-names="greekNames"
+            :typeset-names="typesetNames"
             @navigate="handleNavigate(index, $event)"
             @edit="(state, info) => handleEdit(index, state, info)"
             @import="handleImport(index, $event)"

@@ -11,8 +11,11 @@
 // \mathbin{\htmlData{…}{+}} / \mathrel{…} / \mathpunct{…} to keep their class.
 
 import type { Atom, Row, RowPath, RowPathSegment } from '../editor/layout'
+import type { Cursor } from '../editor/cursor'
 import { rowPathsEqual } from '../editor/layout'
-import { GREEK_NAMES, nameRuns, numberRuns } from '../editor/identifiers'
+import { GREEK_NAMES, type NameRun, nameRuns, numberRuns } from '../editor/identifiers'
+import { cursorInName } from '../editor/names'
+import { type NameScripts, type Range, nameScripts } from '../editor/nameScripts'
 import { constantForSymbol } from '../editor/constants'
 import { CONDITION_OPERATORS } from '../editor/operators'
 import { delimiterLatex, getFunctionDefinition } from '../registry/nodes'
@@ -27,6 +30,13 @@ export interface LayoutLatexOptions {
   // Greek letters drawn as letters (default), or spelled out in italics, as a
   // name typed out is (editor/names.ts).
   greekNames?: boolean
+  // Names with their subscripts and superscripts typeset (default): g_Kr__max
+  // as g with Kr below and max above (editor/nameScripts.ts). Off, drawn as
+  // typed.
+  typesetNames?: boolean
+  // The cursor and anchor. A name either is in, or at the end of, is being
+  // edited, so it is drawn as typed.
+  cursors?: ReadonlyArray<Cursor | null | undefined>
 }
 
 // ---------------------------------------------------------------------------
@@ -103,6 +113,8 @@ function isOperatorSymbol(atom: Atom | undefined): boolean {
   )
 }
 
+type SymbolAtom = Atom & { kind: 'symbol' }
+
 function tag(id: string, body: string): string {
   return `\\htmlData{atom=${id}}{${body}}`
 }
@@ -112,6 +124,53 @@ function nameGlyph(char: string, options: LayoutLatexOptions): string {
   if (char === '_') return '\\_'
   if (GREEK_NAMES.has(char) && options.greekNames !== false) return `\\${char}`
   return `\\mathit{${char}}`
+}
+
+// A word of a name: one letter in maths italic, like a single-letter name;
+// digits upright, as a number (x_12); anything longer in the word italic.
+function wordGlyphs(letters: SymbolAtom[], options: LayoutLatexOptions): string {
+  const [only] = letters
+  const digits = letters.every((l) => /^[0-9]$/.test(l.value))
+  if (digits || (letters.length === 1 && /^[A-Za-z]$/.test(only.value))) {
+    return letters.map((l) => tag(l.id, l.value)).join('')
+  }
+  return letters.map((l) => tag(l.id, nameGlyph(l.value, options))).join('')
+}
+
+// A name with its scripts typeset: {base}_{sub,sub}^{sup}. Every atom is still
+// tagged for the caret; the underscores are drawn as nothing, or as the comma
+// before a second part.
+function typesetName(letters: SymbolAtom[], scripts: NameScripts, options: LayoutLatexOptions) {
+  const slice = ([start, end]: Range) => letters.slice(start, end)
+  const scriptLatex = (role: 'sub' | 'sup') =>
+    scripts.parts
+      .filter((part) => part.role === role)
+      .map((part, index) => {
+        const separator = slice(part.separator)
+        const marks = separator.map((l, i) =>
+          tag(l.id, index > 0 && i === separator.length - 1 ? ',' : ''),
+        )
+        return marks.join('') + wordGlyphs(slice(part.text), options)
+      })
+      .join('')
+
+  const sub = scriptLatex('sub')
+  const sup = scriptLatex('sup')
+  return `{{${wordGlyphs(slice(scripts.base), options)}}${sub ? `_{${sub}}` : ''}${sup ? `^{${sup}}` : ''}}`
+}
+
+// The scripts to typeset a name with, or null to draw it as typed.
+function typesetScripts(
+  run: NameRun,
+  letters: SymbolAtom[],
+  path: RowPath,
+  options: LayoutLatexOptions,
+): NameScripts | null {
+  if (options.typesetNames === false || run.functionName) return null
+  if (options.cursors?.some((cursor) => cursorInName(cursor, path, run.start, run.end))) {
+    return null
+  }
+  return nameScripts(letters.map((l) => l.value))
 }
 
 // One character of a number in scientific notation. The exponent's sign is
@@ -173,21 +232,24 @@ function renderRow(row: Row, path: RowPath, options: LayoutLatexOptions): string
 
       // A name (identifiers.ts) is one piece, so an exponent after it
       // attaches to the whole name. A function name is drawn upright, as an
-      // operator (\mathop keeps TeX's spacing: "sin x"). Each character is
-      // still tagged separately for the caret.
+      // operator (\mathop keeps TeX's spacing: "sin x"). A name with scripts
+      // is typeset, unless it is being edited (g_Kr__max as g, Kr below and
+      // max above). Each character is still tagged separately for the caret.
       const run = runs.get(index)
+      const letters = run ? (row.slice(run.start, run.end) as SymbolAtom[]) : []
+      const scripts = run && typesetScripts(run, letters, path, options)
+      if (run && scripts) {
+        pieces.push(typesetName(letters, scripts, options))
+        index = run.end - 1
+        continue
+      }
       if (run && run.end - run.start > 1) {
-        const letters = row.slice(run.start, run.end)
         if (run.functionName) {
-          pieces.push(
-            `\\mathop{${letters.map((l) => tag(l.id, `\\mathrm{${(l as { value: string }).value}}`)).join('')}}`,
-          )
+          pieces.push(`\\mathop{${letters.map((l) => tag(l.id, `\\mathrm{${l.value}}`)).join('')}}`)
         } else {
           // \\mathit is TeX's italic for words: "Vm" reads as one name, not
           // the slightly spaced V m of single-letter maths italic.
-          pieces.push(
-            `{${letters.map((l) => tag(l.id, nameGlyph((l as { value: string }).value, options))).join('')}}`,
-          )
+          pieces.push(`{${letters.map((l) => tag(l.id, nameGlyph(l.value, options))).join('')}}`)
         }
         index = run.end - 1
         continue

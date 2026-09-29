@@ -10,8 +10,9 @@
 // "arcsin") is that function; a longer name containing one ("cost",
 // "tangent") is just a name. A name that is exactly a constant's MathML name
 // ("pi", "infinity") is reserved: it is the constant. The underscore is part
-// of the name and shown literally (no subscript formatting); it also
-// separates the name's words, so a Greek letter can be one (α_m, names.ts).
+// of the name. It separates the name's words, so a Greek letter can be one
+// (α_m, names.ts), and marks its subscripts and superscripts (g_Kr__max,
+// nameScripts.ts).
 //
 // Each character stays its own atom, so the cursor moves through a name one
 // character at a time; the grouping is worked out here, when parsing and

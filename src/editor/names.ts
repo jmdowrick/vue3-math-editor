@@ -62,6 +62,19 @@ export function nameAtoms(name: string, options: NameOptions = {}): Row {
 
 const key = (path: RowPath) => path.map((s) => `${s.atom}.${s.branch}`).join('/')
 
+// Whether a cursor is in the name at atoms [start, end) of the row at `path`,
+// or at either end of it: the name is being edited.
+export function cursorInName(
+  cursor: Cursor | null | undefined,
+  path: RowPath,
+  start: number,
+  end: number,
+): boolean {
+  return (
+    !!cursor && key(cursor.path) === key(path) && cursor.offset >= start && cursor.offset <= end
+  )
+}
+
 // Replacements in one row: atoms [start, end) became `count` atoms.
 type Replacements = Map<string, Array<{ start: number; end: number; count: number }>>
 
@@ -87,10 +100,9 @@ function settleRow(
   replaced: Replacements,
 ): Row {
   const here = key(path)
-  const touches = (cursor: Cursor | null | undefined, start: number, end: number) =>
-    !!cursor && key(cursor.path) === here && cursor.offset >= start && cursor.offset <= end
   const edited = (start: number, end: number) =>
-    !options.cursorAway && (touches(state.cursor, start, end) || touches(state.anchor, start, end))
+    !options.cursorAway &&
+    (cursorInName(state.cursor, path, start, end) || cursorInName(state.anchor, path, start, end))
 
   const changes: Array<{ start: number; end: number; atoms: Row }> = []
   for (const run of nameRuns(atoms)) {

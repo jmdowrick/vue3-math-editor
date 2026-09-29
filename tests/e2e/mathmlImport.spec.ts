@@ -68,7 +68,9 @@ test('several equations replace every line, in one undo step', async () => {
     ),
   ).toEqual(['enter', 'paste', 'paste', 'paste'])
   await expect(notice()).toContainText('Imported 3 equations')
-  await expect(wb.line(1)).toContainText('I_ion')
+  // I_ion, typeset: I with the subscript ion.
+  expect(await lineMathml(1)).toContain('<ci>I_ion</ci>')
+  await expect(wb.line(1).locator('.msupsub')).not.toHaveCount(0)
   expect(await lineMathml(2)).toContain('<cn cellml:units="mV">77</cn>')
   // Their variables are listed for their units.
   await expect(wb.page.locator('[data-role="variables"] tr[data-variable="g_K"]')).toHaveCount(1)

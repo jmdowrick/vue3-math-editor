@@ -110,8 +110,10 @@ describe('pasting LaTeX', () => {
     expect(pasted('\\frac{\\square}{2}')).toBe('[/2]')
   })
 
-  it('keeps a subscript as a literal underscore in the name', () => {
+  it('reads a subscript as part of the name', () => {
     expect(pasted('x_1+x_{2}')).toBe('x_1+x_2')
+    expect(pasted('C_{Ca,i}')).toBe('C_Ca_i')
+    expect(pasted('C_{\\mathit{Ca},i}')).toBe('C_Ca_i')
     expect(json({ root: latexToRow('x_1+x_{2}'), cursor: { path: [], offset: 0 } })).toEqual([
       'Add',
       'x_1',
@@ -124,7 +126,10 @@ describe('names', () => {
   const typed = (keys: string) => type(keys).root
 
   it('are copied as one italic LaTeX name, functions as the function', () => {
-    expect(rowToLatexSource(typed('Vm_init=2Vm'))).toBe('\\mathit{Vm\\_init}=2\\mathit{Vm}')
+    expect(rowToLatexSource(typed('Vm_init=2Vm'))).toBe(
+      '\\mathit{Vm}_{\\mathit{init}}=2\\mathit{Vm}',
+    )
+    expect(rowToLatexSource(typed('Vm_init'), { typesetNames: false })).toBe('\\mathit{Vm\\_init}')
     expect(rowToLatexSource(typed('x*sin(t)'))).toBe('x\\cdot \\sin \\left(t\\right)')
     expect(rowToLatexSource(typed('cost'))).toBe('\\mathit{cost}')
   })
@@ -133,7 +138,38 @@ describe('names', () => {
     for (const keys of ['Vm_init=2Vm', 'x*sin(t)', 'cost+x2', 'V1_a^2']) {
       const tree = typed(keys)
       expect(text(latexToRow(rowToLatexSource(tree))), keys).toBe(text(tree))
+      const plain = rowToLatexSource(tree, { typesetNames: false })
+      expect(text(latexToRow(plain)), keys).toBe(text(tree))
     }
+  })
+
+  it('are copied with their subscripts and superscripts typeset', () => {
+    expect(rowToLatexSource(typed('V_m'))).toBe('V_{m}')
+    expect(rowToLatexSource(typed('C_Ca_i'))).toBe('C_{\\mathit{Ca},i}')
+    // Braced, so that pasting reads the superscript as part of the name.
+    expect(rowToLatexSource(typed('g_Kr__max'))).toBe('{g_{\\mathit{Kr}}^{\\mathit{max}}}')
+    expect(rowToLatexSource(typed('g_Kr__max^2'))).toBe('{g_{\\mathit{Kr}}^{\\mathit{max}}}^{2}')
+    expect(rowToLatexSource(typed('x__a__b'))).toBe('{x^{a,b}}')
+    // A number part upright, as a number.
+    expect(rowToLatexSource(typed('x_a_12'))).toBe('x_{a,12}')
+    // Drawn as typed: three underscores in a row.
+    expect(rowToLatexSource(typed('a___b'))).toBe('\\mathit{a\\_\\_\\_b}')
+  })
+
+  it('with subscripts and superscripts round-trip through LaTeX', () => {
+    for (const keys of ['V_m', 'C_Ca_i', 'g_Kr__max', 'k__max^2', 'x_a__b__c', 'a___b+x_1^2']) {
+      const tree = typed(keys)
+      expect(text(latexToRow(rowToLatexSource(tree))), keys).toBe(text(tree))
+    }
+  })
+
+  it('pasted with a superscript stay a power unless braced as a name', () => {
+    expect(pasted('x_1^2')).toBe('x_1^{2}')
+    expect(pasted('g_{Kr}^{max}')).toBe('g_Kr^{max}')
+    expect(pasted('{g_{Kr}^{max}}')).toBe('g_Kr__max')
+    expect(pasted('{C^{a,b}}')).toBe('C__a__b')
+    // A braced power (a digit first) is still a power.
+    expect(pasted('{x^{2}}')).toBe('x^{2}')
   })
 
   it('in pasted plain text follow the typing rules', () => {

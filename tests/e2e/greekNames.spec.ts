@@ -14,6 +14,9 @@ test.beforeEach(async ({ page }) => {
 })
 
 const text = (line = 0) => wb.line(line).locator('.katex-html').innerText()
+// The text without its spacing: a typeset subscript (α_m) comes out as α
+// and m on separate lines, with zero-width spaces.
+const tight = async (line = 0) => (await text(line)).replace(/[\s\u200b]/g, '')
 
 test('a typed Greek word stays spelled out while typed, then becomes the letter', async () => {
   await wb.type('tau_m')
@@ -29,7 +32,7 @@ test('\\alpha and alpha are the same variable, drawn the same', async () => {
   await wb.press('Space')
   await wb.type('_m+alpha_m')
   await wb.press('Enter')
-  await expect.poll(() => text(0)).toMatch(/α_m\s*\+\s*α_m/)
+  await expect.poll(() => tight(0)).toBe('αm+αm')
   await expect(wb.page.locator('[data-role="variables"] tr[data-variable="alpha_m"]')).toHaveCount(
     1,
   )
@@ -64,8 +67,7 @@ test('with Greek names off, letters are spelled out, and turning them on draws t
   await wb.press('Enter')
   const toggle = wb.page.locator('[data-role="greek-names"]')
   await toggle.uncheck()
-  await expect.poll(() => text(0)).toContain('alpha')
-  expect(await text(0)).toContain('beta_2')
+  await expect.poll(() => tight(0)).toBe('alpha=beta2')
   await toggle.check()
-  await expect.poll(() => text(0)).toMatch(/α\s*=\s*β_2/)
+  await expect.poll(() => tight(0)).toBe('α=β2')
 })

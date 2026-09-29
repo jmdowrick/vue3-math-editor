@@ -149,12 +149,32 @@ without a `*`: `2x`, `3(x+1)` and `(a+b)(a-b)` are all products.
 so `Vm` reads as one name, not as V m. A single-letter name uses the ordinary maths
 italic.
 
-**The underscore is shown as it is.** `Vm_init` is displayed with its underscore, not as V
-with a subscript. How underscores in variable names should be formatted (a subscript? a
-double underscore for a superscript?) is an open question, so the editor deliberately
-doesn't interpret it yet. The name is exported exactly as typed: `"Vm_init"` in MathJSON,
-`<ci>Vm_init</ci>` in Content MathML. A name can't start with an underscore; a stray `_`
-is reported under the equation.
+**Underscores mark subscripts and superscripts.** One underscore starts a subscript and
+two start a superscript. Several subscripts (or superscripts) are shown one after another,
+separated by commas:
+
+| You type | Shown as |
+|---|---|
+| `V_m` | V with the subscript m |
+| `Vm_init` | Vm with the subscript init |
+| `C_Ca_i` | C with the subscript "Ca, i" |
+| `g_Kr__max` | g with the subscript Kr and the superscript max |
+| `beta_n__inf` | β with the subscript n and the superscript inf |
+| `k__max` | k with the superscript max |
+
+A name is typeset only when the cursor isn't in it or at either end of it. While you are
+typing or editing it, it is shown exactly as typed, underscores included, so you can see
+where the caret is. A name with three or more underscores in a row, or one that ends with
+an underscore, is always shown as typed.
+
+A superscript that starts with a digit (`k__1`) looks like a power, so avoid it.
+
+This only changes how a name looks. The name itself is exported exactly as typed:
+`"g_Kr__max"` in MathJSON, `<ci>g_Kr__max</ci>` in Content MathML. That is a valid CellML
+name, so it is stored in the model unchanged. A name can't start with an underscore; a
+stray `_` is reported under the equation. The workbench's `typesetNames` option (see
+[component-interface.md](component-interface.md)) turns typesetting off, so that every
+name is shown as typed.
 
 ## Functions
 
@@ -476,12 +496,18 @@ With a selection:
 
 - **Ctrl/Cmd+C / X / V** copy, cut and paste. Within the editor, pasting reproduces
   exactly what was copied.
-- Copying also puts **LaTeX** on the clipboard for other applications. A multi-character
-  name is written as `\mathit{Vm\_init}`, so LaTeX treats it as one name too.
+- Copying also puts **LaTeX** on the clipboard for other applications. A name is written
+  the way it is shown: `\mathit{Vm}_{\mathit{init}}`, with a multi-character part in
+  `\mathit` so LaTeX treats it as one word. A name with a superscript is put in braces,
+  `{g_{\mathit{Kr}}^{\mathit{max}}}`, so that pasting it back gives the name rather than a
+  power.
 - Pasting text from elsewhere accepts **LaTeX** (`\frac{1}{2}`, `\sqrt{x}`,
   `\left|x\right|`, …) or **plain maths as you would type it** (`y = (x+1)/2 + sin(x)^2`),
   read with the same rules as typing. In pasted text, `a/b` always makes a fraction,
-  and a LaTeX subscript keeps its underscore: `x_{12}` becomes the name `x_12`.
+  and a LaTeX subscript becomes part of the name: `x_{12}` becomes the name `x_12`, and
+  `C_{Ca,i}` becomes `C_Ca_i`. A LaTeX superscript is a power, unless the name and its
+  superscript are in braces with the superscript starting with a letter:
+  `{g_{Kr}^{max}}` becomes the name `g_Kr__max`, while `x_1^2` stays x_1 squared.
 - Pasting **Content MathML** (from a CellML model, say: a `<math>` element, or a bare
   `<apply>`) imports it. One equation or expression goes in at the caret like any paste;
   several (a `<math>` holding several `<apply><eq/>…`) **replace every line**, one
@@ -521,8 +547,6 @@ Type `\`, the command's name, then Space, Enter, Tab or `(`. Esc cancels.
 
 ## Not supported yet
 
-- **Subscript and superscript formatting in names.** Underscores are kept literally (see
-  *Names*).
 - **Declaring your own functions**, so that `f(x)` is a function call rather than f × x.
 - **Chained comparisons** such as `a < b < c`: join them with ∧ instead.
 - **Integrals, sums, products, limits and matrices.**
