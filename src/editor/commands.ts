@@ -47,7 +47,7 @@ import {
 } from './identifiers'
 import { continuesNumber, followsNumber, inUnits, isUnits } from './numberUnits'
 import { constantForCommand } from './constants'
-import { combinedWithEquals, conditionOperatorForCommand } from './operators'
+import { combinedWithEquals, conditionOperator, conditionOperatorForCommand } from './operators'
 import { getFunctionDefinition } from '../registry/nodes'
 
 export interface EditorState {
@@ -110,6 +110,13 @@ const OPERATOR_VALUES = new Set(['+', '-', '−', '=', '*', '·', '×', ','])
 
 function isOperator(atom: Atom | undefined): boolean {
   return atom?.kind === 'symbol' && OPERATOR_VALUES.has(atom.value)
+}
+
+// Whether a new superscript can attach to this atom: there is one, and it
+// isn't an operator (arithmetic, comparison or logic).
+function canTakeSuperscript(atom: Atom | undefined): boolean {
+  if (!atom || isOperator(atom)) return false
+  return atom.kind !== 'symbol' || !conditionOperator(atom.value)
 }
 
 function isEmptyStructure(atom: Atom): boolean {
@@ -448,7 +455,9 @@ export const insertFraction: Command = (current) => {
 
 // "^": into the superscript right after the cursor, or the end of the one
 // right before it, or a new one. With a selection, the selection gets the
-// exponent: a single atom directly, several in brackets ((a+b)^□).
+// exponent: a single atom directly, several in brackets ((a+b)^□). Without a
+// base before the cursor (start of a row, an operator) it does nothing, so
+// "^^" doesn't nest an empty exponent inside another.
 export const insertSuperscript: Command = (current) => {
   const selection = selectionOf(current)
 
@@ -481,6 +490,8 @@ export const insertSuperscript: Command = (current) => {
       cursor: { path: [...path, { atom: offset - 1, branch: 'sup' }], offset: before.sup.length },
     }
   }
+
+  if (!canTakeSuperscript(before)) return current
 
   return insertStructure(superscript(), 'sup')(state)
 }

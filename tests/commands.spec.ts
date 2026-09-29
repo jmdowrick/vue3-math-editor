@@ -111,6 +111,19 @@ describe('superscripts', () => {
   it('applies to a bracket group', () => {
     expect(json(type('(x+1)^2'))).toEqual(['Power', ['Add', 'x', 1], 2])
   })
+
+  it('does nothing without a base before the cursor', () => {
+    expect(show(type('x^^'))).toBe('x^{‸}')
+    expect(show(type('^'))).toBe('‸')
+    expect(show(type('x+^'))).toBe('x+‸')
+    expect(show(type('x=^'))).toBe('x=‸')
+    expect(show(type('x<^'))).toBe('x<‸')
+  })
+
+  it('still attaches to a function name and to a value inside an exponent', () => {
+    expect(json(type('sin^2', ' ', '(x)'))).toEqual(['Power', ['Sin', 'x'], 2])
+    expect(show(type('x^2^3'))).toBe('x^{2^{3‸}}')
+  })
 })
 
 describe('brackets', () => {
