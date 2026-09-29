@@ -542,6 +542,13 @@ message is shown.
 - **Screenshot tests** are opt-in (`yarn test:e2e:visual`, tagged `@visual`), because
   font rendering differs by OS. Baselines are per platform; create or refresh them with
   `yarn test:e2e:visual --update-snapshots`.
+- **Timing tests** are opt-in too (`yarn test:e2e:perf`, tagged `@perf`), because they
+  depend on the machine. They load SN_soma (`tests/resources/SN_soma.xml`, 126
+  equations, with its 249 variables' units in `SN_soma_units.json`), the large component
+  that made phlynx slow. They check that the units hints add little to the load time, and
+  that a host passing new variable units, equal or changed, causes no long task.
+  `tests/largeComponent.spec.ts` checks the same costs as ratios, in the ordinary unit
+  tests.
 - One-off setup after `yarn install`: `yarn playwright install chromium`.
 
 ## Units checking
@@ -560,10 +567,22 @@ described for users of the component in [Component interface](component-interfac
   the cursor neither recomputes nor re-emits.
 - **Issues in.** The `issues` prop gives problems by line id and variable names (and
   optionally numbers, by value). `unitsIssueMarks` finds every occurrence with
-  `nameOccurrences` / `numberOccurrences` and makes `units` marks; the workbench adds them
-  to the line's parse marks and lists the active line's issues under the equations.
+  `nameOccurrenceMap` / `numberOccurrences` and makes `units` marks; the workbench adds
+  them to the line's parse marks and lists the active line's issues under the equations.
 - **Hints in.** The `variableUnits` prop (name → units) gives hover hints for variables,
   and with it numbers show their own units (or dimensionless) on hover.
+- **Cost on large components.** A host may know the units of hundreds of variables, and
+  pass a new, often equal, `variableUnits` after every commit.
+  - `nameOccurrenceMap` walks a line once for all its names, and is cached by row.
+    Hints look up each of the line's names in the map, so a large map costs no more
+    than a small one.
+  - The workbench holds `issues` and `variableUnits` content-stable
+    (`components/contentStable.ts`), so an equal new object rebuilds nothing.
+  - The lines are a `shallowRef`: each line's state is an immutable value, and deep
+    reactivity would put every read of a line tree through a proxy.
+  - On SN_soma (126 equations, 249 variables' units) this took the load from 2.5 s to
+    0.3 s, the same as without units, and removed a 2.2 s long task after each host
+    update.
 - Issues can also name numbers by the units they were given (`units`), so a number with
   an undefined units name is underlined along with its units.
 - Names are already valid CellML identifiers: `[A-Za-z][A-Za-z0-9_]*`, and Greek letters

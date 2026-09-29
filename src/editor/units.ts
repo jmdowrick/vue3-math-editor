@@ -7,7 +7,7 @@
 // units, shown on hover.
 
 import { contentMathML } from './exports'
-import { nameOccurrences, numberOccurrences } from './identifiers'
+import { nameOccurrenceMap, numberOccurrences } from './identifiers'
 import { type Row, childRows } from './layout'
 import type { Mark } from './marks'
 import type { ParseResult } from './parse'
@@ -153,10 +153,11 @@ export function unitsIssueMarks(root: Row, issues: readonly UnitsIssue[]): Mark[
   const numbers = issues.some((issue) => issue.numbers?.length || issue.units?.length)
     ? numberOccurrences(root)
     : []
+  const names = issues.some((issue) => issue.variables?.length) ? nameOccurrenceMap(root) : null
 
   for (const issue of issues) {
     for (const name of issue.variables ?? []) {
-      for (const atomIds of nameOccurrences(root, name)) {
+      for (const atomIds of names?.get(name) ?? []) {
         marks.push({ message: issue.message, atomIds, kind: 'units' })
       }
     }
@@ -178,13 +179,20 @@ export function unitsIssueMarks(root: Row, issues: readonly UnitsIssue[]): Mark[
 // Hover hints for one line: each variable's units ("Vm: millivolt") where
 // known, and each number's units ("0.25: mV"). A number's units are hidden, so
 // its hint is always there; without `variableUnits` (no units checking),
-// numbers without units aren't explained.
+// numbers without units aren't explained. The line's names are looked up in
+// `variableUnits`, not the other way round, so a large map costs no more than
+// a small one.
 export function unitsHintMarks(root: Row, variableUnits: VariableUnits | null): Mark[] {
   const marks: Mark[] = []
 
-  for (const [name, units] of Object.entries(variableUnits ?? {})) {
-    for (const atomIds of nameOccurrences(root, name)) {
-      marks.push({ message: `${name}: ${units}`, atomIds, kind: 'hint' })
+  if (variableUnits) {
+    for (const [name, occurrences] of nameOccurrenceMap(root)) {
+      // Own entries only: a variable called "constructor" isn't Object's.
+      if (!Object.hasOwn(variableUnits, name)) continue
+      const units = variableUnits[name]
+      for (const atomIds of occurrences) {
+        marks.push({ message: `${name}: ${units}`, atomIds, kind: 'hint' })
+      }
     }
   }
 
