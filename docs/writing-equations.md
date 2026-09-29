@@ -237,7 +237,7 @@ leaves it, it becomes the letter. The name is the same either way: both are the 
 | `\nan` (or `\notanumber`) | NaN | not a number |
 | `\true`, `\false` | true, false | the logical constants |
 
-The toolbar has buttons for π, e and ∞. The constants' MathML names are **reserved**:
+The toolbar's Symbols gallery has buttons for π, e and ∞. The constants' MathML names are **reserved**:
 typing `pi`, `exponentiale`, `infinity`, `notanumber`, `true` or `false` as a whole name
 gives the constant, not a variable (names containing them, such as `pi_m`, are ordinary
 names). A typed letter `e` is still a variable called e, shown in italics; only `\e` (or
@@ -288,8 +288,8 @@ code.
 | | `\xor` | ⊻ | exclusive or |
 | `!` | `\not` | ¬ | not |
 
-`<=`, `>=` and `!=` combine into one symbol as you type the `=`. The toolbar has a
-button for each (except ⊻).
+`<=`, `>=` and `!=` combine into one symbol as you type the `=`. The toolbar's Symbols
+gallery has a button for each.
 
 The logical operators bind more loosely than comparisons, and ∧ more tightly than ∨: so
 `t>=0 & t<1` is (t ≥ 0) ∧ (t < 1), and `a \or b & c` is a ∨ (b ∧ c). ¬ applies to the whole
@@ -383,14 +383,17 @@ way for absolute values: the first `|` opens and the next closes.
 ## Empty slots, incomplete input and warnings
 
 You can leave slots empty and fill them later; **Tab** jumps to the next empty slot and
-**Shift+Tab** to the previous one. An operator with nothing after it (`x+`) gets an empty
-slot in the output rather than an error.
+**Shift+Tab** to the previous one. Something missing (an operator with nothing after it,
+`x+`, or an empty slot) is marked once you leave the equation, as "Missing operand after
++" or "Empty denominator"; while you're typing it isn't a problem yet.
 
 Anything the editor can't place, such as a stray `_`, a comma outside a function's
 brackets or a malformed number like `1.2.3`, gets a red wavy underline; point at it to
-see what's wrong. The problems in the equation you're editing are also listed in a
-warning box under it. The marked part is otherwise ignored, and the rest of the
-equation is still understood.
+see what's wrong. An equation with problems is outlined, and the status bar under the
+equations names the first (click it to go there; point at it to see them all). The
+marked part is otherwise ignored, and the rest of the equation is still understood.
+(An application can choose to show problems only once you've finished with an
+equation: pressed Enter, or moved to another.)
 
 ## Checking units
 
@@ -412,7 +415,7 @@ the equations lists every variable your equations use, with a box for its units:
 - **Variables.** Type or pick each variable's units; press Enter or move on to use them.
   A variable without units, or with a units name that isn't defined, is marked.
   Variables you no longer use are kept, greyed, until you remove them.
-- **Problems** are underlined in amber and listed under the equation you're editing, as
+- **Problems** are underlined in amber and shown in the status bar under the equations, as
   soon as an equation is complete: units that don't match (`x + t` with x in metres and
   t in seconds, or mV added to volts: units that differ only in scale don't match
   either), or a function argument that has to be dimensionless (`exp(t)`). Point at an
@@ -487,8 +490,8 @@ With a selection:
   become its (hidden) units, from CellML 2.0 or 1.x; `dimensionless` is left off, as
   it's the default. Variables' units aren't in the maths, so give them again in the
   Units panel. Anything the editor can't write (an element outside CellML's MathML, a
-  second derivative) is left as an empty slot, and a note under the equations says what
-  was left out.
+  second derivative) is left out, leaving an empty slot or a missing operand, and the
+  equation's problem says what was left out until you change it.
 - **Copy as** in the toolbar copies the selection, or the whole equation, as **LaTeX**,
   **MathJSON** or **Content MathML**. A selection is exported on its own, so selecting
   `a+b` in `y=a+b` gives just `a+b`.

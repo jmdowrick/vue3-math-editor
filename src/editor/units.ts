@@ -26,7 +26,8 @@ export interface EquationLine {
   // Units names given to numbers (without the default dimensionless).
   units: string[]
   // Whether the line is ready to check: not empty, no parse problems, no
-  // empty slots and no units still being typed.
+  // empty slots (written <ci>_</ci> in `mathml`), no units still being typed,
+  // nothing left out when it was imported, and in CellML mode an equation.
   complete: boolean
 }
 
@@ -35,6 +36,13 @@ export interface EquationLine {
 // user changed them.
 export interface EquationsChangeInfo {
   source: 'load' | 'edit'
+}
+
+// Why a line was committed (the line-commit event): Enter, the "+ Line"
+// button, moving to another line (↑/↓ or a click), focus leaving the lines,
+// or a paste of several equations replacing every line.
+export interface LineCommitInfo {
+  reason: 'enter' | 'new-line' | 'navigate' | 'blur' | 'paste'
 }
 
 // A units problem to show on a line.
@@ -52,7 +60,14 @@ export interface UnitsIssue {
 // A variable's units, by name, for hover hints.
 export type VariableUnits = Readonly<Record<string, string>>
 
-export function equationLine(id: string, root: Row, parsed: ParseResult | null): EquationLine {
+// `otherProblems`: problems found outside the parse (what couldn't be
+// imported, a CellML line that isn't an equation); any make it incomplete.
+export function equationLine(
+  id: string,
+  root: Row,
+  parsed: ParseResult | null,
+  otherProblems = 0,
+): EquationLine {
   if (!parsed) return { id, mathml: '', variables: [], units: [], complete: false }
 
   const variables: string[] = []
@@ -72,7 +87,11 @@ export function equationLine(id: string, root: Row, parsed: ParseResult | null):
     mathml: contentMathML(root, { cellml: true }),
     variables,
     units,
-    complete: parsed.diagnostics.length === 0 && placeholders === 0 && !hasEmptyUnits(root),
+    complete:
+      parsed.diagnostics.length === 0 &&
+      otherProblems === 0 &&
+      placeholders === 0 &&
+      !hasEmptyUnits(root),
   }
 }
 

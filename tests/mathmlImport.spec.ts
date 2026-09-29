@@ -143,14 +143,69 @@ describe('importContentMathML', () => {
     const result = imported(
       math('<apply><eq/><ci>y</ci><apply><factorial/><ci>n</ci></apply></apply>'),
     )
-    expect(shown(result.equations[0])).toBe('y=()')
+    // Nothing in its place: the equation is left missing its right-hand side.
+    expect(shown(result.equations[0])).toBe('y=')
     expect(result.problems).toEqual(["<factorial> isn't supported; it was left as an empty slot"])
+    expect(result.lineProblems).toEqual([result.problems])
     const second = imported(
       math(
         '<apply><eq/><ci>y</ci><apply><diff/><bvar><ci>t</ci><degree><cn>2</cn></degree></bvar><ci>x</ci></apply></apply>',
       ),
     )
     expect(second.problems[0]).toMatch(/order other than 1/)
+  })
+
+  it('leaves a gap between operators, or an empty slot in a structure', () => {
+    const sum = only(
+      math(
+        '<apply><eq/><ci>y</ci><apply><plus/><ci>a</ci><apply><factorial/><ci>n</ci></apply><ci>b</ci></apply></apply>',
+      ),
+    )
+    expect(shown(sum)).toBe('y=a++b')
+    expect(parseRow(sum).diagnostics.map((d) => d.message)).toEqual(['Missing operand after +'])
+
+    const frac = only(
+      math('<apply><divide/><ci>x</ci><apply><factorial/><ci>n</ci></apply></apply>'),
+    )
+    expect(parseRow(frac).diagnostics.map((d) => d.message)).toEqual(['Empty denominator'])
+  })
+
+  it('keeps an empty slot for a piece missing its value or condition', () => {
+    const result = imported(
+      math(
+        '<apply><eq/><ci>y</ci><piecewise><piece><cn>1</cn></piece><otherwise><cn>0</cn></otherwise></piecewise></apply>',
+      ),
+    )
+    expect(result.problems).toEqual(['A <piece> without a value and a condition'])
+    expect(parseRow(result.equations[0]).diagnostics.map((d) => d.message)).toEqual([
+      'Empty condition',
+    ])
+  })
+
+  it('reports problems for each equation', () => {
+    const result = imported(
+      math(
+        '<apply><eq/><ci>a</ci><cn>1</cn></apply><apply><eq/><ci>b</ci><apply><factorial/><ci>n</ci></apply></apply>',
+      ),
+    )
+    expect(result.lineProblems).toEqual([
+      [],
+      ["<factorial> isn't supported; it was left as an empty slot"],
+    ])
+  })
+
+  it.each([
+    ['a missing right-hand side', 'a='],
+    ['a missing operand', 'y=x-'],
+    ['empty slots', 'y=1/'],
+    ['an empty function argument', 'y=sin('],
+  ])('reads <ci>_</ci> back as an empty slot, so %s reads back as it was', (_, text) => {
+    const root = type(text).root
+    const exported = cellml(root)
+    expect(exported).toContain('<ci>_</ci>')
+    const back = only(exported)
+    expect(cellml(back)).toBe(exported)
+    expect(imported(exported).problems).toEqual([])
   })
 
   it('warns about variable names the editor would read otherwise', () => {

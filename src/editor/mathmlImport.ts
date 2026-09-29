@@ -6,7 +6,10 @@
 // is left off. Variables' units aren't in the maths, so they come separately.
 //
 // Anything the editor can't write (an element outside CellML's MathML subset,
-// a second-order derivative, …) becomes an empty slot, and is reported.
+// a second-order derivative, …) is left out, as an empty slot or a missing
+// operand (nothing is put in its place), and is reported, for its equation
+// too. <ci>_</ci>, which the export writes for an empty slot, reads back as
+// one, so an unfinished equation reads back as it was.
 
 import { CONSTANTS } from './constants'
 import { functionForSpelling, reservedConstant } from './identifiers'
@@ -34,6 +37,9 @@ export interface MathMLImport {
   equations: Row[]
   // What couldn't be read as written, once each.
   problems: string[]
+  // The same, for each equation (parallel to `equations`): an equation with
+  // any is not as written.
+  lineProblems: string[][]
 }
 
 const MATHML_NS = 'http://www.w3.org/1998/Math/MathML'
@@ -55,15 +61,18 @@ export function importContentMathML(text: string): MathMLImport | null {
   const doc = new DOMParser().parseFromString(wrapped, 'application/xml')
   if (doc.getElementsByTagName('parsererror').length > 0) return null
 
-  const problems = new Set<string>()
-  const reader = new Reader(problems)
   const top = doc.documentElement
   const maths = elements(top).filter((el) => el.localName === 'math')
-  const equations = (maths.length ? maths.flatMap(elements) : elements(top)).map(
-    (el) => reader.expression(el).row,
-  )
+  const lines = (maths.length ? maths.flatMap(elements) : elements(top)).map((el) => {
+    const problems = new Set<string>()
+    return { row: new Reader(problems).expression(el).row, problems: [...problems] }
+  })
 
-  return { equations, problems: [...problems] }
+  return {
+    equations: lines.map((line) => line.row),
+    problems: [...new Set(lines.flatMap((line) => line.problems))],
+    lineProblems: lines.map((line) => line.problems),
+  }
 }
 
 const elements = (el: Element): Element[] => Array.from(el.children)
@@ -122,14 +131,17 @@ class Reader {
     }
   }
 
-  // An empty slot where something couldn't be read.
+  // Nothing where something couldn't be read: an empty slot, or a missing
+  // operand between the operators around it.
   private unsupported(what: string): Written {
     this.problems.add(`${what} isn't supported; it was left as an empty slot`)
-    return primary([group([])])
+    return primary([])
   }
 
   private identifier(el: Element): Written {
     const name = (el.textContent ?? '').trim()
+    // An empty slot, as the export writes it.
+    if (name === '_') return primary([])
     if (!NAME.test(name)) {
       this.problems.add(`"${name}" isn't a CellML variable name`)
       return primary(row(name))
@@ -281,12 +293,17 @@ class Reader {
   private piecewise(el: Element): Written {
     const pieces: Array<[Row, Row]> = []
     let otherwise: Row | null = null
+    // A piece or otherwise missing its value or condition keeps an empty slot
+    // for it.
+    const part = (el: Element | undefined) => (el ? this.expression(el).row : [])
     for (const child of elements(el)) {
       const [first, second] = elements(child)
-      if (child.localName === 'piece' && first && second) {
-        pieces.push([this.expression(first).row, this.expression(second).row])
-      } else if (child.localName === 'otherwise' && first) {
-        otherwise = this.expression(first).row
+      if (child.localName === 'piece') {
+        if (!first || !second) this.problems.add('A <piece> without a value and a condition')
+        pieces.push([part(first), part(second)])
+      } else if (child.localName === 'otherwise') {
+        if (!first) this.problems.add('An <otherwise> without a value')
+        otherwise = part(first)
       } else {
         this.problems.add(`<${child.localName}> in <piecewise> isn't supported; it was left out`)
       }

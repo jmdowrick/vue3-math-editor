@@ -12,7 +12,8 @@ let wb: Workbench
 
 const panel = () => wb.page.locator('[data-role="units-panel"]')
 const summary = () => wb.page.locator('[data-role="units-summary"]')
-const issues = () => wb.page.locator('[data-role="units-issues"] li')
+// Every problem shown, as the status bar lists them on hover.
+const issues = () => wb.problems()
 const unitsMarks = (line = 0) => wb.line(line).locator('[data-role="mark"][data-kind="units"]')
 const variable = (name: string) =>
   wb.page.locator(`[data-role="variables"] tr[data-variable="${name}"]`)
@@ -50,15 +51,14 @@ test.describe('with libCellML', () => {
     await expect(unitsMarks()).toHaveCount(0)
 
     await giveUnits('x', 'metre')
-    await expect(issues()).toHaveText(['v has no units', 't has no units'])
+    await expect.poll(issues).toEqual(['v has no units', 't has no units'])
     await expect(unitsMarks()).toHaveCount(2)
 
     await giveUnits('v', 'metre_per_second')
     await expect(variable('v')).toHaveAttribute('data-state', 'unknown')
-    await expect(issues()).toHaveText([
-      't has no units',
-      'No units called metre_per_second are defined',
-    ])
+    await expect
+      .poll(issues)
+      .toEqual(['t has no units', 'No units called metre_per_second are defined'])
   })
 
   test('checks an example as you type, and again as units change', async () => {
@@ -77,8 +77,8 @@ test.describe('with libCellML', () => {
     await giveUnits('C_m', 'farad')
     await expect(summary()).toHaveText('1 units problem in 1 equation.')
     await wb.focusLine(0)
-    await expect(issues()).toHaveCount(1)
-    await expect(issues().first()).toContainText("Units don't match")
+    await expect.poll(issues).toHaveLength(1)
+    expect((await issues())[0]).toContain("Units don't match")
     await expect(unitsMarks().first()).toBeVisible()
 
     await giveUnits('C_m', 'uF_per_cm2')
@@ -90,9 +90,9 @@ test.describe('with libCellML', () => {
     await wb.focusLine(0)
     await wb.type('E_K=-77{volt}')
     await wb.focusLine(0)
-    await expect(issues()).toHaveText([
-      "Units don't match in E_K = -77.0: E_K is in mV, -77.0 is in volt",
-    ])
+    await expect
+      .poll(issues)
+      .toEqual(["Units don't match in E_K = -77.0: E_K is in mV, -77.0 is in volt"])
     await expect(unitsMarks()).toHaveCount(2) // E_K, and 77 with its units
   })
 
@@ -122,7 +122,7 @@ test.describe('with libCellML', () => {
 
     await file.getByRole('button', { name: 'Remove mine.cellml' }).click()
     await wb.focusLine(0)
-    await expect(issues()).toHaveText(['No units called furlong are defined'])
+    await expect.poll(issues).toEqual(['No units called furlong are defined'])
   })
 
   test('keys typed in the panel stay there', async () => {
@@ -234,7 +234,7 @@ test.describe('layout', () => {
   const box = async (selector: string) => (await wb.page.locator(selector).boundingBox())!
 
   test('the units panel is beside the editor, with the outputs in tabs under it', async () => {
-    const editor = await box('.editor-card')
+    const editor = await box('.editor-panel')
     const side = await box('[data-role="units-panel"]')
     const outputs = await box('[data-role="outputs"]')
     expect(side.x).toBeGreaterThanOrEqual(editor.x + editor.width)
@@ -252,7 +252,7 @@ test.describe('layout', () => {
 
   test('on a narrow screen: editor, units, then outputs', async () => {
     await wb.page.setViewportSize({ width: 800, height: 900 })
-    const editor = await box('.editor-card')
+    const editor = await box('.editor-panel')
     const side = await box('[data-role="units-panel"]')
     const outputs = await box('[data-role="outputs"]')
     expect(side.y).toBeGreaterThanOrEqual(editor.y + editor.height)
@@ -277,6 +277,6 @@ test.describe('without libCellML', () => {
     await expect(variable('v')).toHaveAttribute('data-state', 'ok') // nothing to know it by
     await wb.focusLine(0)
     await expect(unitsMarks()).toHaveCount(0)
-    await expect(issues()).toHaveCount(0)
+    await expect.poll(issues).toEqual([])
   })
 })

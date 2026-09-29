@@ -5,7 +5,10 @@
 // every change. The parser never throws: incomplete input becomes
 // `Placeholder` nodes (an empty row, a missing operand), and anything it
 // cannot make sense of is skipped and reported in `diagnostics`, with the
-// atoms it covers, so the UI can mark them (MathField's `marks`).
+// atoms it covers, so the UI can mark them (MathField's `marks`). Missing
+// operands and empty slots are reported too, as `incomplete` (still being
+// typed, most likely), on the operator or structure that needs them; an
+// empty row on its own (a blank line) isn't.
 //
 // Grammar, loosest to tightest binding:
 //
@@ -69,6 +72,9 @@ export interface ParseDiagnostic {
   // The atoms the problem covers (all of "1.2.3", say), for marking in the UI.
   // They are consecutive atoms of one row.
   atomIds: string[]
+  // Something is missing (an operand, an empty slot), as while an equation
+  // is being typed; otherwise the row has something wrong in it.
+  incomplete?: true
 }
 
 export interface ParseResult {
@@ -215,6 +221,9 @@ function comparisonType(op: string) {
   const operator = conditionOperator(op)
   return operator?.role === 'comparison' ? operator.type : null
 }
+
+// An operator as written in a message: * as ×, - as −.
+const displayed = (op: Operator) => (op === '*' ? '×' : op === '-' ? '−' : op)
 
 function placeholder(): AstNode {
   return { type: 'Placeholder' }
@@ -368,7 +377,9 @@ class Parser {
     const token = this.next()!
     const atom = (token as { atom: StructureAtom }).atom
 
-    return atom.kind === 'superscript' ? this.child(atom.sup) : placeholder()
+    return atom.kind === 'superscript'
+      ? this.child(atom.sup, 'Empty exponent', token.atomIds)
+      : placeholder()
   }
 
   private parsePrimary(): AstNode {
@@ -380,6 +391,7 @@ class Parser {
     // or a superscript with nothing before it (parseFactor then attaches the
     // superscript to this placeholder).
     if (!token || !this.startsPrimary(token)) {
+      this.reportMissing(token)
       return placeholder()
     }
 
@@ -393,9 +405,9 @@ class Parser {
       case 'constant':
         return { type: 'Constant', name: token.name }
       case 'function':
-        return this.parseFunction(token.name)
+        return this.parseFunction(token.name, token.atomIds)
       case 'structure':
-        return this.parseStructure(token.atom)
+        return this.parseStructure(token.atom, token.atomIds)
       default:
         return placeholder()
     }
@@ -431,7 +443,7 @@ class Parser {
   }
 
   // name(args), name^n(args) or name x.
-  private parseFunction(name: string): AstNode {
+  private parseFunction(name: string, atomIds: string[]): AstNode {
     const powers: AstNode[] = []
 
     while (this.peekStructure('superscript')) {
@@ -443,11 +455,12 @@ class Parser {
 
     if (next?.kind === 'structure' && next.atom.kind === 'group' && next.atom.open === '(') {
       this.next()
-      args = this.parseArguments(next.atom.body)
+      args = this.parseArguments(next.atom.body, `Empty argument of ${name}`, next.atomIds)
     } else if (next && this.startsPrimary(next)) {
       // "sin x": the argument is the next factor.
       args = [this.parseFactor()]
     } else {
+      this.diagnostics.push({ message: `${name} needs an argument`, atomIds, incomplete: true })
       args = [placeholder()]
     }
 
@@ -462,7 +475,7 @@ class Parser {
   }
 
   // Split a function's bracket body at top-level commas.
-  private parseArguments(body: Row): AstNode[] {
+  private parseArguments(body: Row, what: string, atomIds: string[]): AstNode[] {
     const args: Row[] = [[]]
 
     for (const atom of body) {
@@ -473,38 +486,44 @@ class Parser {
       }
     }
 
-    return args.map((arg) => this.child(arg))
+    return args.map((arg) => this.child(arg, what, atomIds))
   }
 
-  private parseStructure(atom: StructureAtom): AstNode {
+  private parseStructure(atom: StructureAtom, ids: string[]): AstNode {
+    const slot = (row: Row, what: string) => this.child(row, what, ids)
+
     switch (atom.kind) {
       case 'fraction':
         return {
           type: 'Divide',
-          numerator: this.child(atom.num),
-          denominator: this.child(atom.den),
+          numerator: slot(atom.num, 'Empty numerator'),
+          denominator: slot(atom.den, 'Empty denominator'),
         }
       case 'group': {
-        if (atom.open === '|') return { type: 'Abs', value: this.child(atom.body) }
+        if (atom.open === '|') {
+          return { type: 'Abs', value: slot(atom.body, 'Empty absolute value') }
+        }
         // ⌊x⌋, ⌈x⌉: floor and ceiling.
         const name = functionForBracket(atom.open)
-        if (name) return { type: 'FunctionCall', name, args: [this.child(atom.body)] }
-        return { type: 'Group', value: this.child(atom.body) }
+        if (name) {
+          return { type: 'FunctionCall', name, args: [slot(atom.body, `Empty ${name}`)] }
+        }
+        return { type: 'Group', value: slot(atom.body, 'Empty brackets') }
       }
       case 'root':
         return {
           type: 'Root',
-          radicand: this.child(atom.body),
-          degree: atom.index ? this.child(atom.index) : null,
+          radicand: slot(atom.body, 'Empty root'),
+          degree: atom.index ? slot(atom.index, 'Empty root index') : null,
         }
       case 'derivative':
         return {
           type: 'Derivative',
-          expression: this.child(atom.expr),
-          variable: this.child(atom.variable),
+          expression: slot(atom.expr, 'Empty derivative'),
+          variable: slot(atom.variable, 'Empty derivative variable'),
         }
       case 'piecewise': {
-        let otherwise = atom.otherwise ? this.child(atom.otherwise) : null
+        let otherwise = atom.otherwise ? slot(atom.otherwise, 'Empty otherwise value') : null
         // A default 0.0 takes the units of the first piece's number.
         const inherited = inheritedOtherwiseUnits(atom)
         if (otherwise?.type === 'Number' && inherited)
@@ -512,8 +531,8 @@ class Parser {
         return {
           type: 'Piecewise',
           pieces: atom.pieces.map(({ value, condition }) => ({
-            value: this.child(value),
-            condition: this.child(condition),
+            value: slot(value, 'Empty piece value'),
+            condition: slot(condition, 'Empty condition'),
           })),
           otherwise,
         }
@@ -528,8 +547,47 @@ class Parser {
     }
   }
 
-  private child(row: Row): AstNode {
+  // A structure's slot (a numerator, an exponent). Empty, it is reported on
+  // the structure's atoms as `what` ("Empty denominator").
+  private child(row: Row, what?: string, atomIds?: string[]): AstNode {
+    if (row.length === 0 && what && atomIds) {
+      this.diagnostics.push({ message: what, atomIds, incomplete: true })
+    }
     return parseRowInto(row, this.diagnostics)
+  }
+
+  // A missing operand, before `next` (the token that can't start one, if
+  // any): reported on the operator that needs it. Nothing is reported when
+  // the tokens before were skipped as unexpected (they are reported already).
+  private reportMissing(next: Token | undefined): void {
+    const previous = this.tokens[this.index - 1]
+    let message: string
+    let atomIds: string[]
+
+    if (previous?.kind === 'operator' && previous.op !== ',') {
+      message = comparisonType(previous.op)
+        ? previous.op === '='
+          ? 'Missing right-hand side'
+          : `Missing right-hand side of ${previous.op}`
+        : `Missing operand after ${displayed(previous.op)}`
+      atomIds = previous.atomIds
+    } else if (previous) {
+      return
+    } else if (next?.kind === 'operator') {
+      message = comparisonType(next.op)
+        ? next.op === '='
+          ? 'Missing left-hand side'
+          : `Missing left-hand side of ${next.op}`
+        : `Missing operand before ${displayed(next.op)}`
+      atomIds = next.atomIds
+    } else if (next?.kind === 'structure' && next.atom.kind === 'superscript') {
+      message = 'Missing base for the exponent'
+      atomIds = next.atomIds
+    } else {
+      return
+    }
+
+    this.diagnostics.push({ message, atomIds, incomplete: true })
   }
 
   // --- token helpers -------------------------------------------------------

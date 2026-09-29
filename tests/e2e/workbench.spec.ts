@@ -189,9 +189,9 @@ test.describe('names', () => {
 
 test('stray input is reported, not lost', async () => {
   await wb.type('1,2')
-  await expect(wb.page.locator('[data-role="diagnostics"]')).toContainText('Unexpected ","')
+  await expect(wb.status()).toContainText('Unexpected ","')
   await wb.press('Backspace', 2)
-  await expect(wb.page.locator('[data-role="diagnostics"]')).toHaveCount(0)
+  await expect(wb.status()).toBeEmpty()
 })
 
 test.describe('scientific numbers', () => {
@@ -240,7 +240,7 @@ test.describe('conditions', () => {
 
   test('the toolbar inserts them', async () => {
     await wb.type('a')
-    await wb.page.locator('[data-role="condition-buttons"] button[title^="Or"]').click()
+    await wb.tool('symbols', 'Or')
     await wb.type('b')
     await wb.expectMathJson(['Or', 'a', 'b'])
   })
@@ -248,7 +248,7 @@ test.describe('conditions', () => {
   test('a chained comparison is marked', async () => {
     await wb.type('0<x<1')
     await expect(wb.marks()).toHaveCount(1)
-    await expect(wb.page.locator('[data-role="diagnostics"]')).toContainText("can't be chained")
+    await expect(wb.status()).toContainText("can't be chained")
   })
 })
 
@@ -277,7 +277,7 @@ test.describe('constants and functions', () => {
 
   test('the toolbar inserts π', async () => {
     await wb.type('2')
-    await wb.page.locator('[data-role="constant-buttons"] button[title^="Pi"]').click()
+    await wb.tool('symbols', 'Pi')
     await wb.expectMathJson(['Multiply', 2, 'Pi'])
   })
 
@@ -285,7 +285,7 @@ test.describe('constants and functions', () => {
     await wb.type('floor(x/2')
     await wb.press(' ')
     await wb.type(')+')
-    await wb.page.locator('button[title^="Ceiling"]').click()
+    await wb.tool('brackets', 'Ceiling')
     await wb.type('y')
     await wb.expectMathJson(['Add', ['Floor', ['Divide', 'x', 2]], ['Ceil', 'y']])
     await expect(wb.line(0)).toContainText('⌊')

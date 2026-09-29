@@ -14,6 +14,7 @@ Nothing here needs libCellML.
   :issues="issues"
   :variable-units="variableUnits"
   @equations-change="lines = $event"
+  @line-commit="(line) => save(line)"
 />
 ```
 
@@ -22,11 +23,15 @@ Nothing here needs libCellML.
 | Prop | Type | Default | Meaning |
 |---|---|---|---|
 | `cellml` | `boolean` | `false` | CellML mode for the Content MathML the user sees and copies: the CellML namespace is declared on `<math>`, and every number carries `cellml:units`. |
-| `issues` | `UnitsIssue[]` | `[]` | Units problems to show. Each is underlined in amber on its line and listed under the equations when that line is active; the message shows on hover. |
+| `issues` | `UnitsIssue[]` | `[]` | Units problems to show. Each is underlined in amber on its line, the line is outlined, and the status bar shows it; the message shows on hover. |
 | `variableUnits` | `Record<string, string>` | none | Each variable's units by name, shown on hover ("Vm: millivolt"). When given, numbers without units also show theirs on hover ("2: dimensionless"); numbers with units always do ("0.25: mV"). |
 | `greekNames` | `boolean` | `true` | Names that are Greek letters' names (`alpha`, `tau_m`) are drawn as the letters (α, τ_m), however they were typed; off, every Greek letter is spelled out (`\alpha` included). The names, and so the MathML, are the same either way. |
 | `outputs` | `boolean` | `true` | The output panels (Content MathML, MathJSON, LaTeX, AST) and the "Copy as" menu. Off, only the equation lines (and the `side` slot) show: for an application embedding the editor. |
 | `history` | `boolean` | `true` | The workbench's own undo and redo. Off, nothing is recorded, the Undo and Redo buttons are hidden, and Ctrl/Cmd+Z and Ctrl/Cmd+Y are left for the host (see [Embedding](#embedding-in-an-application)). |
+| `validate` | `'input' \| 'commit'` | `'input'` | When a line's problems are shown (see [Problems](#problems-and-the-status-bar)). `'input'`: as the user types, except what is only missing (`x+`, an empty slot), which waits until the line is left. `'commit'`: once the line is committed (`line-commit`); while it is edited again, they are hidden until the next commit. |
+| `readonly` | `boolean` | `false` | The lines are shown but can't be edited: the toolbar is disabled, and typing, Enter, pasting and undo do nothing. `setMathML` still sets the lines. |
+| `autofocus` | `boolean` | `false` | The active line has the `autofocus` attribute, so a dialog's focus management (PrimeVue `Dialog` focuses the first `[autofocus]` once it has opened) puts the caret there; it is also focused when the workbench is mounted. |
+| `debug` | `boolean` | `false` | Show the cursor and selection readout under the lines ("Cursor: 0.den @ 1"). |
 
 ### Slot
 
@@ -61,10 +66,10 @@ function open(mathml: string) {
 
 | Method | Meaning |
 |---|---|
-| `setMathML(xml: string): MathMLImport` | Replace every line with the equations in `xml`: Content MathML with one or more `<math>` elements, or bare `<apply>`s, one line each. An empty string leaves one empty line. It is a new document: the undo history starts again, so the user can't undo back to what was there. Returns `{ equations, problems }`, where `problems` lists what couldn't be read (each was left as an empty slot). If `xml` isn't well-formed, the lines are left as they were and `problems` says so. |
+| `setMathML(xml: string): MathMLImport` | Replace every line with the equations in `xml`: Content MathML with one or more `<math>` elements, or bare `<apply>`s, one line each. An empty string leaves one empty line. It is a new document: the undo history starts again, so the user can't undo back to what was there, and the lines count as committed. Returns `{ equations, problems, lineProblems }`: what couldn't be read (it was left out), in all and for each equation. Each line's problems are also shown as its problems (and make it not `complete`) until it is edited. If `xml` isn't well-formed, the lines are left as they were and `problems` says so. |
 | `focus(): void` | Focus the active line. |
 
-### Event
+### Events
 
 `equations-change` is emitted with every line whenever the content of any line changes
 (not when only the cursor moves), and once when the workbench is created. Its second
@@ -85,21 +90,57 @@ interface EquationLine {
   mathml: string      // Content MathML in CellML mode, whatever the `cellml` prop
   variables: string[] // variable names used, in order of first use
   units: string[]     // units names given to numbers (dimensionless is not listed)
-  complete: boolean   // not empty, no parse problems, no empty slots, no units being typed
+  complete: boolean   // ready to use: see below
 }
 ```
 
 The MathML is always in CellML mode here, because that is what a units checker needs:
 every number has `cellml:units`, its own if the user gave it units (`0.25{mV}`), otherwise
-`dimensionless`. A line that isn't `complete` should not be sent for checking; its MathML
-may contain empty slots (`<ci>_</ci>`).
+`dimensionless`.
+
+A line is `complete` when it isn't empty and has no problems: nothing the parser couldn't
+read, no empty slot or missing operand, no units still being typed, nothing left out when
+it was imported, and (in CellML mode) it is an equation. A line that isn't `complete`
+should not be sent for checking or stored as the model's maths. Its MathML writes each
+empty slot or missing operand as `<ci>_</ci>` (`a =` is `<apply><eq/><ci>a</ci><ci>_</ci></apply>`),
+and `setMathML` and pasting read `<ci>_</ci>` back as an empty slot, so an unfinished line
+can be kept and loaded again as it was.
+
+`line-commit` is emitted when the user is done with a line, if it changed since it was
+last committed (or loaded):
+
+```ts
+interface LineCommitInfo {
+  reason:
+    | 'enter'    // Enter, which also adds a line
+    | 'new-line' // the "+ Line" button
+    | 'navigate' // ↑/↓ or a click to another line
+    | 'blur'     // focus left the lines (not for the toolbar or its galleries)
+    | 'paste'    // a paste of several equations replaced every line: one each
+}
+// emitted as (line: EquationLine, info: LineCommitInfo)
+```
+
+A host that validates or stores lines can do it on `line-commit` rather than on every
+`equations-change`: typically, store `line.mathml` when `line.complete`.
+
+### Problems and the status bar
+
+A line's problems are underlined where they are (red, or amber for units issues from
+`issues`; point at one to read it), and the line is outlined. Under the lines, a status
+bar one line high shows the active line's first problem, or else the first on any line,
+as "Line 2: Missing right-hand side", with "+3 more" if there are others; pointing at it
+lists them all, and clicking it goes to that line. It also shows the `\` command being
+typed, and what a paste did ("Imported 3 equations…"). It is always there, so the lines
+don't move when a problem appears or goes. When problems show at all is the `validate`
+prop's choice.
 
 ### Issues
 
 ```ts
 interface UnitsIssue {
   lineId: string                // the EquationLine id
-  message: string               // shown on hover and in the list
+  message: string               // shown on hover and in the status bar
   variables?: readonly string[] // underline every occurrence of these names in the line
   numbers?: readonly number[]   // underline these numbers (matched by value)
   units?: readonly string[]     // underline the numbers given these units (0.25{mV})
@@ -107,8 +148,8 @@ interface UnitsIssue {
 ```
 
 Issues are matched to lines by id, so they stay on the right line when lines are added or
-removed above them. An issue naming nothing that appears in the line is listed but not
-underlined.
+removed above them. An issue naming nothing that appears in the line is shown in the
+status bar but not underlined.
 
 The types are exported from the package: `import type { EquationLine, UnitsIssue } from
 'vue3-math-editor'`.
@@ -121,8 +162,9 @@ line, with numbers' `cellml:units` kept. Each imported line is reported through
 `equations-change` like any other, so a units checker sees it straight away; variables'
 units aren't part of the maths and are given as usual. To set the lines from the host,
 use `setMathML` (above). The reader itself is exported as `importContentMathML(text)`,
-returning `{ equations, problems }` (rows ready for the editor), or `null` if the text
-isn't well-formed XML.
+returning `{ equations, problems, lineProblems }` (rows ready for the editor, and what
+couldn't be read, in all and for each equation), or `null` if the text isn't well-formed
+XML.
 
 What it reads:
 
@@ -139,7 +181,10 @@ What it reads:
 | Conditions | `piecewise` with `piece` and `otherwise` |
 
 Anything else (for example a higher-order derivative, `factorial`, or a `csymbol`) is
-listed in `problems` and left as an empty slot. A `ci` that isn't a CellML name, or is
+listed in `problems` and left out, with nothing in its place: it leaves an empty slot, or
+an operator missing its operand (`y = <factorial/>…` reads as `y =`), so the line is not
+`complete` and says why. A `<piece>` or `<otherwise>` missing its value or condition
+keeps an empty slot for it. `<ci>_</ci>` is an empty slot, and not reported. A `ci` that isn't a CellML name, or is
 spelled like a function or a constant, is also reported.
 
 ## Number units
@@ -356,8 +401,40 @@ import 'primeicons/primeicons.css'
 import 'vue3-math-editor/style.css'
 ```
 
-An editor inside another application usually wants `:outputs="false"`, and the lines
-loaded with `setMathML` rather than pasted.
+An editor inside another application usually wants something like:
+
+```vue
+<EquationWorkbench
+  ref="workbench"
+  cellml
+  :outputs="false"
+  :history="false"
+  validate="commit"
+  autofocus
+  @line-commit="(line) => line.complete && store(line)"
+/>
+```
+
+with the lines loaded with `setMathML` rather than pasted.
+
+### Toolbar
+
+The toolbar is one row of groups, as in a word processor's equation editor: Fraction,
+Power, Roots ▾, Brackets ▾ (absolute value, floor, ceiling), Functions ▾ (trigonometric,
+hyperbolic and their inverses, exp, ln, log), Derivative, Piecewise and Symbols ▾
+(operators, constants, relations, logic), then the line buttons. ▾ opens a gallery; a
+click never takes the focus from the line. The groups are defined in
+`src/editor/toolbar.ts`.
+
+The toolbar is sticky: it stays at the top of whatever scrolls the lines (the page, or a
+dialog's content) while the user scrolls through them. Set `--me-toolbar-top` to keep it
+below a sticky header of the host's. Sticky positioning needs nothing between the toolbar
+and that scrolling element to set `overflow`.
+
+### Size
+
+Equations are drawn at `--me-line-font-size` (default `1.05rem`; KaTeX draws its
+display maths about 1.2 times that). Set it on an element around the workbench.
 
 ### Undo and redo
 

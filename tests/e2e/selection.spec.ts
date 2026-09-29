@@ -97,7 +97,7 @@ test.describe('acting on the selection', () => {
 
   test('the toolbar square root wraps it', async () => {
     await selectAPlusB()
-    await wb.page.getByTitle('Square root  ( \\sqrt )').click()
+    await wb.tool('radical', 'Square root')
     await expect(wb.line(0)).toBeFocused()
     await wb.expectMathJson(['Equal', 'y', ['Sqrt', ['Add', 'a', 'b']]])
   })

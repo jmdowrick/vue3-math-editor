@@ -31,6 +31,11 @@ describe('equationLine', () => {
     expect(line('x+').complete).toBe(false)
     expect(line('x=2{').complete).toBe(false) // units still being typed
     expect(line('x=1,2').complete).toBe(false)
+    // The empty slot is written <ci>_</ci>, and reported where it is.
+    expect(line('x=1/').mathml).toContain('<ci>_</ci>')
+    expect(parseRow(type('x=1/').root).diagnostics.map((d) => d.message)).toEqual([
+      'Empty denominator',
+    ])
     expect(line('')).toEqual({
       id: 'line-1',
       mathml: '',
@@ -38,6 +43,14 @@ describe('equationLine', () => {
       units: [],
       complete: false,
     })
+  })
+})
+
+describe('equationLine with other problems', () => {
+  it('is incomplete when something outside the parse is wrong', () => {
+    const root = type('y=x').root
+    expect(equationLine('line-1', root, parseRow(root)).complete).toBe(true)
+    expect(equationLine('line-1', root, parseRow(root), 1).complete).toBe(false)
   })
 })
 

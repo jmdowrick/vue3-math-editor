@@ -251,6 +251,76 @@ describe('diagnostics', () => {
   })
 })
 
+describe('incomplete input', () => {
+  // [message, the atoms marked] for each incomplete diagnostic.
+  const incomplete = (atoms: Row) =>
+    parseRow(atoms).diagnostics.map((d) => {
+      expect(d.incomplete).toBe(true)
+      return d.message
+    })
+  const markedOn = (atoms: Row, ...marked: Atom[]) =>
+    expect(parseRow(atoms).diagnostics.map((d) => d.atomIds)).toEqual(
+      marked.map((atom) => [atom.id]),
+    )
+
+  it('reports a missing operand on the operator that needs it', () => {
+    const atoms = row('a=')
+    expect(incomplete(atoms)).toEqual(['Missing right-hand side'])
+    markedOn(atoms, atoms[1])
+
+    const sum = row('x+')
+    expect(incomplete(sum)).toEqual(['Missing operand after +'])
+    markedOn(sum, sum[1])
+
+    expect(incomplete(row('x*'))).toEqual(['Missing operand after ×'])
+    expect(incomplete(row('x-'))).toEqual(['Missing operand after −'])
+    expect(incomplete(row('x<'))).toEqual(['Missing right-hand side of <'])
+    expect(incomplete(row('x=1∧'))).toEqual(['Missing operand after ∧'])
+  })
+
+  it('reports a missing operand at the start on the operator after it', () => {
+    const atoms = row('=b')
+    expect(incomplete(atoms)).toEqual(['Missing left-hand side'])
+    markedOn(atoms, atoms[0])
+    expect(incomplete(row('+x'))).toEqual(['Missing operand before +'])
+    expect(incomplete(row(superscript(row('2'))))).toEqual(['Missing base for the exponent'])
+  })
+
+  it('reports each missing operand once', () => {
+    expect(incomplete(row('x++y'))).toEqual(['Missing operand after +'])
+    expect(incomplete(row('a=+'))).toEqual(['Missing right-hand side', 'Missing operand after +'])
+  })
+
+  it('reports empty slots on their structure', () => {
+    const frac = fraction(row('1'), [])
+    expect(incomplete(row('y=', frac))).toEqual(['Empty denominator'])
+    markedOn(row('y=', frac), frac)
+
+    expect(incomplete(row('x', superscript()))).toEqual(['Empty exponent'])
+    expect(incomplete(row(root()))).toEqual(['Empty root'])
+    expect(incomplete(row(root(row('x'), [])))).toEqual(['Empty root index'])
+    expect(incomplete(row(group([], '|')))).toEqual(['Empty absolute value'])
+    expect(incomplete(row(group([])))).toEqual(['Empty brackets'])
+    expect(incomplete(row(derivative([], row('t'))))).toEqual(['Empty derivative'])
+    expect(incomplete(row(func('sin'), group([])))).toEqual(['Empty argument of sin'])
+  })
+
+  it('reports a function without an argument on the function', () => {
+    const sin = func('sin')
+    expect(incomplete(row('y=', sin))).toEqual(['sin needs an argument'])
+    markedOn(row('y=', sin), sin)
+  })
+
+  it('reports only the outer slot when a slot is empty, and nothing for a blank line', () => {
+    expect(incomplete(row(fraction()))).toEqual(['Empty numerator', 'Empty denominator'])
+    expect(parseRow([]).diagnostics).toEqual([])
+  })
+
+  it('reports nothing more after an unexpected glyph', () => {
+    expect(parseRow(row('x+?')).diagnostics.map((d) => d.message)).toEqual(['Unexpected "?"'])
+  })
+})
+
 describe('integration with the exporters', () => {
   it('produces MathJSON through the existing renderer', () => {
     expect(astToMathJson(parse('4t-3'))).toEqual(['Subtract', ['Multiply', 4, 't'], 3])
