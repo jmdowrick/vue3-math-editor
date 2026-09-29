@@ -429,7 +429,8 @@ click never takes the focus from the line. The groups are defined in
 
 The toolbar is sticky: it stays at the top of whatever scrolls the lines (the page, or a
 dialog's content) while the user scrolls through them. Set `--me-toolbar-top` to keep it
-below a sticky header of the host's. Sticky positioning needs nothing between the toolbar
+below a sticky header of the host's. While stuck, it spans the panel and draws the panel's
+top edge, so no line shows around it. Sticky positioning needs nothing between the toolbar
 and that scrolling element to set `overflow`.
 
 ### Size
