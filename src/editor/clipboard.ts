@@ -19,8 +19,10 @@ import {
   nameRuns,
   numberRuns,
   reservedConstant,
+  startsName,
 } from './identifiers'
-import { greekWord } from './names'
+import { greekWord, nameAtoms } from './names'
+import { type Range, nameScripts } from './nameScripts'
 import { constantForLatexCommand, constantForSymbol, constantForUprightText } from './constants'
 import {
   CONDITION_OPERATORS,
@@ -186,6 +188,9 @@ const isOperatorAtom = (atom: Atom | undefined) =>
 export interface LatexOptions {
   // Greek letters as \alpha (default), or spelled out, as on screen.
   greekNames?: boolean
+  // Names' subscripts and superscripts typeset (default), as on screen:
+  // g_Kr__max as {g_{\mathit{Kr}}^{\mathit{max}}}. Off, as typed.
+  typesetNames?: boolean
 }
 
 export function rowToLatexSource(row: Row, options: LatexOptions = {}): string {
@@ -232,6 +237,9 @@ function nameLatex(name: string, functionName: string | null, options: LatexOpti
   const constant = reservedConstant(name)
   if (constant) return symbolLatex(constant)
 
+  const typeset = options.typesetNames !== false ? typesetNameLatex(name, options) : null
+  if (typeset) return typeset
+
   // With Greek names, each Greek word as its letter: alpha_m is \alpha\_m.
   const words = name.split('_')
   const greek = options.greekNames !== false && words.some((word) => greekWord(word))
@@ -247,6 +255,40 @@ function nameLatex(name: string, functionName: string | null, options: LatexOpti
   }
 
   return name.length === 1 ? name : `\\mathit{${name.replace(/_/g, '\\_')}}`
+}
+
+// A name with its scripts typeset (nameScripts.ts): V_{m}, C_{\mathit{Ca},i},
+// \alpha_{m}. One with a superscript is braced, {g_{\mathit{Kr}}^{\mathit{max}}},
+// so that pasting reads it back as the name, not a power. Null for a name
+// drawn as typed.
+function typesetNameLatex(name: string, options: LatexOptions): string | null {
+  const values = nameAtoms(name, options).map((atom) => (atom as { value: string }).value)
+  const scripts = nameScripts(values)
+  if (!scripts) return null
+
+  const word = ([start, end]: Range) => nameWordLatex(values.slice(start, end), options)
+  const script = (role: 'sub' | 'sup') =>
+    scripts.parts
+      .filter((part) => part.role === role)
+      .map((part) => word(part.text))
+      .join(',')
+
+  const sub = script('sub')
+  const sup = script('sup')
+  const latex = `${word(scripts.base)}${sub ? `_{${sub}}` : ''}${sup ? `^{${sup}}` : ''}`
+  return sup ? `{${latex}}` : latex
+}
+
+// A word of a typeset name, as atom values: x, 12, \mathit{Kr}, \alpha, \tau2.
+// It is always followed by _, ^, a comma or a brace, so a command needs no
+// space after it.
+function nameWordLatex(values: string[], options: LatexOptions): string {
+  const [first, ...rest] = values
+  if (first.length > 1 && GREEK_NAMES.has(first) && options.greekNames !== false) {
+    return `\\${first}${rest.join('')}`
+  }
+  const text = values.join('')
+  return text.length === 1 || /^[0-9]+$/.test(text) ? text : `\\mathit{${text}}`
 }
 
 function atomLatex(atom: Atom, previous: Atom | undefined, options: LatexOptions): string {
@@ -468,7 +510,7 @@ class LatexReader {
             atoms.push(unitsFromText(this.readText().replace(/^units:/, '')))
             break
           }
-          atoms.push(...this.readRow({ close: true }))
+          atoms.push(...bracedName(this.readRow({ close: true })))
           this.next() // "}"
           break
         case 'close':
@@ -507,9 +549,9 @@ class LatexReader {
         atoms.push(superscript(this.readScript()))
         return
       case '_':
-        // Subscripts aren't supported: the underscore is kept literally as
-        // part of the name, with its content after it (x_{12} -> x_12).
-        atoms.push(symbol('_'), ...this.readScript())
+        // A name's subscript (nameScripts.ts): x_{12} is the name x_12, and
+        // C_{Ca,i}, with two, is C_Ca_i.
+        atoms.push(symbol('_'), ...commasAsUnderscores(this.readScript(), 1))
         return
       case '/':
         atoms.push(this.readInfixFraction(atoms))
@@ -805,6 +847,42 @@ class LatexReader {
 function endsWithNumber(atoms: Row): boolean {
   const runs = numberRuns(atoms)
   return runs.length > 0 && runs[runs.length - 1].end === atoms.length
+}
+
+// A script's commas as underscores: `count` of them (1 between subscripts,
+// 2 between superscripts).
+function commasAsUnderscores(atoms: Row, count: number): Row {
+  return atoms.flatMap((atom) =>
+    atom.kind === 'symbol' && atom.value === ','
+      ? Array.from({ length: count }, () => symbol('_'))
+      : [atom],
+  )
+}
+
+// A braced name with a superscript, as typesetNameLatex writes one:
+// {g_{\mathit{Kr}}^{\mathit{max}}} is the name g_Kr__max, not g_Kr to the
+// power max. Each superscript has to start with a letter, so that a braced
+// power from elsewhere, {x^{2}}, stays a power. Anything else is returned as
+// it is.
+function bracedName(atoms: Row): Row {
+  const last = atoms[atoms.length - 1]
+  if (last?.kind !== 'superscript' || atoms.length < 2) return atoms
+
+  const name = [
+    ...atoms.slice(0, -1),
+    symbol('_'),
+    symbol('_'),
+    ...commasAsUnderscores(last.sup, 2),
+  ]
+  const runs = nameRuns(name)
+  if (runs.length !== 1 || runs[0].start !== 0 || runs[0].end !== name.length) return atoms
+  if (runs[0].functionName) return atoms
+
+  const scripts = nameScripts(name.map((atom) => (atom as { value: string }).value))
+  const letterFirst = scripts?.parts
+    .filter((part) => part.role === 'sup')
+    .every((part) => startsName(name[part.text[0]]))
+  return letterFirst ? name : atoms
 }
 
 // A units atom holding a name typed as characters.

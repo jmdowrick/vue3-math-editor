@@ -130,8 +130,20 @@ these notes cover how they are implemented.
   grouping is decided from the whole run when parsing, rendering and copying
   (`nameRuns` in `editor/identifiers.ts`).
 - A name followed by brackets that isn't a known function is a product: `Vm(t)` is Vm·(t).
-- The underscore is part of the name and shown literally, with no subscript formatting,
-  deliberately, while the wider convention for variable-name formatting is undecided.
+- The underscore is part of the name. It is also how a name's subscripts and superscripts
+  are written: `_part` is a subscript and `__part` a superscript, with several of either
+  joined by commas. So `g_Kr__max` is shown as g with the subscript Kr and the
+  superscript max (`nameScripts` in `editor/nameScripts.ts`).
+  - The split is worked out on the name's atoms, so a Greek letter counts as one atom, and
+    every atom (underscores included) is still tagged for the caret. The underscores are
+    drawn as nothing, or as the comma before a second part.
+  - A name the cursor or anchor is in, or at either end of, is drawn as typed: the same
+    rule `settleNames` uses (`cursorInName`). The caret is therefore never inside a
+    typeset name.
+  - A name with three or more underscores in a row, or ending with one, is drawn as typed.
+  - The `typesetNames` prop (default on) switches this off.
+  - The name, and so the exported MathML and MathJSON, is the same either way. This is
+    the convention cellml-text-editor.js is to follow too.
 - Each character is still its own atom, so the cursor, selection and Backspace work one
   character at a time inside a name.
 - Rendering: a multi-character name is drawn in `\mathit` (TeX's italic for words, so `Vm`
@@ -429,8 +441,13 @@ focused, non-editable `div`, so no hidden text area is needed.
     with brackets dropped from a bracketed operand. `^` takes a braced group, one
     character, or a whole run of digits (`x^10`). Letters follow the typing rules, `*`
     becomes `·`, and `<= >= != == &&` are the operators.
-  - Subscripts aren't supported: the underscore is kept literally as part of the name, so
-    `x_{12}` pastes as the name `x_12`.
+  - A subscript after a name is part of the name, with commas as underscores: `x_{12}`
+    is `x_12`, and `C_{Ca,i}` is `C_Ca_i`.
+  - A braced name with a superscript whose parts start with a letter is one name:
+    `{g_{Kr}^{max}}` is `g_Kr__max`. This is how copying writes such a name. Any other
+    `^` is a power, so `x_1^2` from elsewhere is still x_1 squared.
+  - A superscript part that starts with a digit (`k__1`) copies as `{k^{1}}` and pastes
+    back as a power.
   - Pasting replaces the selection and leaves the cursor after the pasted atoms (one undo
     step).
 - `rowToLatexSource` and `latexToRow` round-trip every atom kind (unit-tested).
@@ -649,9 +666,6 @@ Findings from trying libcellml.js 0.7.1 on the editor's output:
 - **The otherwise default with an expression first.** A default 0.0 takes the units of a
   first piece that is a number with units, but not of one that is an expression, whose
   units only the checker knows. The checker could say which units it needs.
-- **Subscripts in names.** The underscore is shown literally while the convention for
-  formatting variable names (subscripts, and superscripts within them) is undecided. The
-  `greekNames` switch could grow into a "typeset names" switch: α_m with m as a subscript.
 - **Boolean-valued equations.** Because `=` is a comparison, `b = x < 1` is a chained
   comparison; it has to be written `b = (x < 1)`. Rare in CellML, where variables are
   real-valued.

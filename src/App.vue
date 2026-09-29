@@ -36,6 +36,9 @@ const withDialog = query.has('dialog')
 const dialogOpen = ref(false)
 // Names that are Greek letters' names (alpha, tau_m) drawn as the letters.
 const greekNames = ref(!query.has('nogreek'))
+// Names' subscripts and superscripts typeset (g_Kr__max as g with Kr below and
+// max above).
+const typesetNames = ref(!query.has('plainnames'))
 
 const workbench = ref<InstanceType<typeof EquationWorkbench> | null>(null)
 const lines = ref<EquationLine[]>([])
@@ -152,6 +155,10 @@ Object.assign(window, {
         <input v-model="greekNames" type="checkbox" data-role="greek-names" />
         Draw Greek names as Greek letters (alpha_m as α_m)
       </label>
+      <label class="demo-option">
+        <input v-model="typesetNames" type="checkbox" data-role="typeset-names" />
+        Typeset subscripts and superscripts in names (g_Kr__max as g<sub>Kr</sub><sup>max</sup>)
+      </label>
     </section>
 
     <div :class="{ 'scroll-box': scroll }" data-role="scroll-box">
@@ -165,6 +172,7 @@ Object.assign(window, {
         :readonly="readonly"
         :autofocus="autofocus"
         :greek-names="greekNames"
+        :typeset-names="typesetNames"
         :issues="issues"
         :variable-units="hintUnits"
         @equations-change="handleEquationsChange"
