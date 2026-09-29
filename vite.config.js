@@ -4,6 +4,8 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import vueDevTools from 'vite-plugin-vue-devtools'
 
+// The demo application (`yarn dev`, `yarn build:demo`). The library that is
+// published to npm is built with vite.lib.config.js (`yarn build`).
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [
@@ -20,6 +22,9 @@ export default defineConfig({
   // import.meta.url)), which pre-bundling would break.
   optimizeDeps: {
     exclude: ['vue3-libcellml.js', 'libcellml.js'],
+  },
+  build: {
+    outDir: 'dist-demo',
   },
   resolve: {
     alias: {

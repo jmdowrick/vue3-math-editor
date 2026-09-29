@@ -91,3 +91,7 @@ yarn test:e2e     # browser tests (Playwright)
 ```sh
 yarn lint
 ```
+
+## License
+
+[Apache-2.0](LICENSE)

@@ -10,23 +10,39 @@ jobs:
     if: github.repository == 'vue3-repos/vue3-math-editor'
     runs-on: ubuntu-26.04
     permissions:
-      id-token: write # for --provenance
+      id-token: write # for npm trusted publishing (OIDC) and provenance
       contents: read # for actions/checkout
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      # Yarn comes from corepack, at the version in package.json's packageManager.
       - run: corepack enable
-      - run: yarn install
+      # Fails if yarn.lock is out of date with package.json: commit the lockfile.
+      - run: yarn install --immutable
+      - name: Check the tag matches the package version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="v$(node -p "require('./package.json').version")"
+          if [[ "$TAG" != "$VERSION" ]]; then
+            echo "::error::Tag $TAG does not match package.json version $VERSION"
+            exit 1
+          fi
       - run: yarn prerelease
       - name: Determine npm tag
         id: determine_tag
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
           # If the git tag (e.g., v1.0.0-beta.0) contains a hyphen, it's a prerelease.
-          if [[ "${{ github.ref_name }}" == *-* ]]; then
-            echo "tag=next" >> $GITHUB_OUTPUT
+          if [[ "$TAG" == *-* ]]; then
+            echo "tag=next" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=latest" >> $GITHUB_OUTPUT
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
           fi
+      # Trusted publishing needs npm 11.5.1 or later (Node 24 ships with it).
+      - run: npm --version
       - run: npm publish --provenance --ignore-scripts --tag ${{ steps.determine_tag.outputs.tag }}

@@ -510,10 +510,10 @@ message is shown.
 
 ## Testing
 
-- **Unit tests** (Vitest, `npm test`): `tests/*.spec.ts`. Pure model code (cursor
+- **Unit tests** (Vitest, `yarn test`): `tests/*.spec.ts`. Pure model code (cursor
   movement, parser, commands, clipboard, exports, LaTeX generation), including randomised
   property tests (KaTeX accepts any layout tree the renderer produces).
-- **Browser tests** (Playwright, `npm run test:e2e`): `tests/e2e/`. These drive the
+- **Browser tests** (Playwright, `yarn test:e2e`): `tests/e2e/`. These drive the
   workbench in Chromium, because caret placement and click hit-testing depend on real
   KaTeX layout, which jsdom doesn't do. `tests/e2e/samples.ts` defines each sample
   equation as the keys that type it plus the layout tree it must produce. Every test that
@@ -521,10 +521,10 @@ message is shown.
   counts, same MathJSON), then computes the expected cursor positions from it. Assertions
   read the cursor and MathJSON the workbench prints, not pixels. The config starts the
   Vite dev server itself.
-- **Screenshot tests** are opt-in (`npm run test:e2e:visual`, tagged `@visual`), because
+- **Screenshot tests** are opt-in (`yarn test:e2e:visual`, tagged `@visual`), because
   font rendering differs by OS. Baselines are per platform; create or refresh them with
-  `npm run test:e2e:visual -- --update-snapshots`.
-- One-off setup after `npm install`: `npx playwright install chromium`.
+  `yarn test:e2e:visual --update-snapshots`.
+- One-off setup after `yarn install`: `yarn playwright install chromium`.
 
 ## Units checking
 

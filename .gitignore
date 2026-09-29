@@ -12,6 +12,7 @@ node_modules
 dist
 dist-demo
 dist-ssr
+dist-demo
 coverage
 *.local
 

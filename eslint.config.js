@@ -24,8 +24,8 @@ export default defineConfig([
     },
   },
 
-  // Config files run under Node.
   {
+    name: 'app/node-files',
     files: ['*.config.{js,ts}'],
     languageOptions: {
       globals: {
