@@ -32,7 +32,7 @@
 //   except what is only missing on the line being typed; 'commit' marks a
 //   line's problems once it is committed.
 // - `readonly`, `autofocus` and `debug` (the cursor readout) props.
-import { computed, nextTick, onMounted, ref, toRaw, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, shallowRef, toRaw, watch } from 'vue'
 import katex from 'katex'
 import Button from 'primevue/button'
 import Card from 'primevue/card'
@@ -46,6 +46,7 @@ import Tabs from 'primevue/tabs'
 import Tag from 'primevue/tag'
 
 import MathField, { type Mark, type NavigationState } from './MathField.vue'
+import { contentStable } from './contentStable'
 import {
   type Command,
   type EditorState,
@@ -132,7 +133,17 @@ const exportOptions = computed(() => ({
   typesetNames: props.typesetNames,
 }))
 
-const equations = ref<EditorState[]>([emptyState()])
+// Shallow: each line's state is an immutable value, replaced whole, so it
+// needn't be reactive itself. Deep reactivity would put every read of a line
+// tree (parsing, drawing, marks, export) through a proxy, which on a large
+// component costs seconds. So the array is replaced, never changed in place:
+// changing it in place wouldn't update anything.
+const equations = shallowRef<EditorState[]>([emptyState()])
+
+// The lines with line `index` replaced.
+const withLine = (index: number, state: EditorState) =>
+  equations.value.map((line, i) => (i === index ? state : line))
+
 // Each line's id, parallel to `equations`: stable while the line exists, so a
 // host's issues stay on the right line when lines are added or removed.
 let lineCount = 0
@@ -156,7 +167,7 @@ function active(): EditorState {
 // Every state is settled first: no cursor before a number's hidden units, and
 // units no longer wanted removed (editor/numberUnits.ts).
 function setEquation(index: number, state: EditorState) {
-  equations.value[index] = settle(state)
+  equations.value = withLine(index, settle(state))
 }
 
 // Settled: number units (numberUnits.ts), then names (names.ts). A line no
@@ -167,7 +178,7 @@ const settle = (state: EditorState, cursorAway = false) =>
 // Leaving a line, and turning Greek names on or off, settle names too.
 watch(activeIndex, (_, left) => {
   const line = equations.value[left]
-  if (line) equations.value[left] = settle(line, true)
+  if (line) equations.value = withLine(left, settle(line, true))
 })
 watch(
   () => props.greekNames,
@@ -357,7 +368,11 @@ function addLineAfterActive(reason: 'enter' | 'new-line') {
   commitLine(activeIndex.value, reason)
   pushHistory()
   const index = activeIndex.value + 1
-  equations.value.splice(index, 0, emptyState())
+  equations.value = [
+    ...equations.value.slice(0, index),
+    emptyState(),
+    ...equations.value.slice(index),
+  ]
   lineIds.value.splice(index, 0, newLineId())
   activeIndex.value = index
   focusActive()
@@ -400,7 +415,8 @@ function removeActiveLine() {
   if (props.readonly || equations.value.length <= 1) return
 
   pushHistory()
-  equations.value.splice(activeIndex.value, 1)
+  const removed = activeIndex.value
+  equations.value = equations.value.filter((_, i) => i !== removed)
   lineIds.value.splice(activeIndex.value, 1)
   activeIndex.value = Math.max(0, activeIndex.value - 1)
   // Continue at the end of the line above.
@@ -564,9 +580,14 @@ interface LineMarkSets {
   complete: Mark[]
   hints: Mark[]
 }
+// The host's issues and variable units, replaced only when their content
+// changes (contentStable.ts): a host passing an equal new object, as it may
+// after every commit, rebuilds no marks.
+const hostIssues = contentStable(() => props.issues)
+const hostVariableUnits = contentStable(() => props.variableUnits ?? null)
 const issuesByLine = computed(() => {
   const byLine = new Map<string, UnitsIssue[]>()
-  for (const issue of props.issues) {
+  for (const issue of hostIssues.value) {
     byLine.set(issue.lineId, [...(byLine.get(issue.lineId) ?? []), issue])
   }
   return byLine
@@ -574,7 +595,7 @@ const issuesByLine = computed(() => {
 const marksCache = computed(() => {
   // Read here so the cache is replaced when any changes.
   void issuesByLine.value
-  void props.variableUnits
+  void hostVariableUnits.value
   void props.cellml
   return new WeakMap<Row, LineMarkSets>()
 })
@@ -589,7 +610,7 @@ const markSets = computed(() =>
         ...(cellml ? [cellml] : []),
         ...unitsIssueMarks(root, issuesByLine.value.get(lineIds.value[index]) ?? []),
       ]
-      const hints = unitsHintMarks(root, props.variableUnits ?? null)
+      const hints = unitsHintMarks(root, hostVariableUnits.value)
       sets = {
         all: [...problems, ...hints],
         complete: [...problems.filter((mark) => !mark.incomplete), ...hints],

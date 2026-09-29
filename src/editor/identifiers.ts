@@ -182,8 +182,29 @@ export function inheritedOtherwiseUnits(atom: PiecewiseAtom): string | null {
 // Every place a variable name appears in an equation, at any depth: the atoms
 // of each occurrence. For marking a problem reported by name rather than by
 // position, such as a units mismatch from libCellML.
-export function nameOccurrences(root: Row, name: string): string[][] {
-  const found: string[][] = []
+export function nameOccurrences(root: Row, name: string): readonly string[][] {
+  return nameOccurrenceMap(root).get(name) ?? []
+}
+
+// Every variable name in an equation, with the atoms of each place it
+// appears: nameOccurrences for all names at once, in one walk of the tree.
+// Cached by row (rows are never changed in place), so looking up a line's
+// names again, for another name or another host update, costs nothing.
+const occurrenceCache = new WeakMap<Row, ReadonlyMap<string, readonly string[][]>>()
+
+// A whole-word symbol that can be a variable's name (not an operator or digit).
+const WORD = /^[A-Za-z][A-Za-z0-9_]*$/
+
+export function nameOccurrenceMap(root: Row): ReadonlyMap<string, readonly string[][]> {
+  const cached = occurrenceCache.get(root)
+  if (cached) return cached
+
+  const found = new Map<string, string[][]>()
+  const add = (name: string, atomIds: string[]) => {
+    const list = found.get(name)
+    if (list) list.push(atomIds)
+    else found.set(name, [atomIds])
+  }
 
   const visit = (row: Row) => {
     const runs = new Map(nameRuns(row).map((run) => [run.start, run]))
@@ -193,8 +214,9 @@ export function nameOccurrences(root: Row, name: string): string[][] {
       const run = runs.get(i)
 
       if (run) {
-        if (run.name === name && !run.functionName) {
-          found.push(row.slice(run.start, run.end).map((a) => a.id))
+        if (!run.functionName) {
+          const atomIds = row.slice(run.start, run.end).map((a) => a.id)
+          add(run.name, atomIds)
         }
         i = run.end - 1
         continue
@@ -202,8 +224,8 @@ export function nameOccurrences(root: Row, name: string): string[][] {
 
       // A whole-word symbol, such as a Greek letter ("alpha"), but not a
       // constant (π is never a variable).
-      if (atom.kind === 'symbol' && atom.value === name && !constantForSymbol(name)) {
-        found.push([atom.id])
+      if (atom.kind === 'symbol' && WORD.test(atom.value) && !constantForSymbol(atom.value)) {
+        add(atom.value, [atom.id])
       }
 
       // A units name is not a variable.
@@ -213,6 +235,7 @@ export function nameOccurrences(root: Row, name: string): string[][] {
   }
 
   visit(root)
+  occurrenceCache.set(root, found)
   return found
 }
 

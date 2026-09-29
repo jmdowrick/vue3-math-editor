@@ -18,7 +18,8 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   reporter: process.env.CI ? 'github' : 'list',
   // Screenshot comparisons are opt-in: they depend on the OS's font rendering.
-  grepInvert: process.env.E2E_VISUAL ? undefined : /@visual/,
+  // So are timing checks (@perf): they depend on the machine.
+  grepInvert: process.env.E2E_VISUAL || process.env.E2E_PERF ? undefined : /@visual|@perf/,
 
   use: {
     baseURL: `http://localhost:${port}`,
