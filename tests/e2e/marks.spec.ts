@@ -72,6 +72,6 @@ test('every line shows its own marks, not just the active one', async () => {
 
   await expect(wb.marks(0)).toHaveCount(1)
   await expect(wb.marks(1)).toHaveCount(0)
-  // The diagnostics list is for the active line.
-  await expect(wb.page.locator('[data-role="diagnostics"]')).toHaveCount(0)
+  // The status bar names the problem on the other line.
+  await expect(wb.status()).toContainText('Line 1: Unexpected ","')
 })

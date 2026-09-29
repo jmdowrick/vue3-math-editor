@@ -26,12 +26,18 @@
 //   with its own undo history gets Ctrl/Cmd+Z and Y.
 // - `setMathML(xml)` and `focus()`, exposed: set every line from Content
 //   MathML (a new document: no undo back past it), and focus the editor.
-import { computed, nextTick, ref, toRaw, watch } from 'vue'
+// - `line-commit` event: a line finished with (Enter, a new line, moving to
+//   another line, focus leaving the editor), if it changed since last time.
+// - `validate` prop: 'input' (default) marks problems as the user types,
+//   except what is only missing on the line being typed; 'commit' marks a
+//   line's problems once it is committed.
+// - `readonly`, `autofocus` and `debug` (the cursor readout) props.
+import { computed, nextTick, onMounted, ref, toRaw, watch } from 'vue'
 import katex from 'katex'
 import Button from 'primevue/button'
 import Card from 'primevue/card'
-import Divider from 'primevue/divider'
 import Menu from 'primevue/menu'
+import Popover from 'primevue/popover'
 import Tab from 'primevue/tab'
 import TabList from 'primevue/tablist'
 import TabPanel from 'primevue/tabpanel'
@@ -44,18 +50,7 @@ import {
   type Command,
   type EditorState,
   emptyState,
-  insertAbs,
   insertAtoms,
-  insertCeiling,
-  insertFloor,
-  insertDerivative,
-  insertPiecewise,
-  insertFraction,
-  insertFunction,
-  insertNthRoot,
-  insertSquareRoot,
-  insertSuperscript,
-  insertSymbol,
   namedCommand,
 } from '../editor/commands'
 import { cursorAtEnd, describeCursor } from '../editor/cursor'
@@ -64,6 +59,7 @@ import { type EditInfo, History, OTHER_EDIT, undoGroup } from '../editor/history
 import {
   type EquationLine,
   type EquationsChangeInfo,
+  type LineCommitInfo,
   type UnitsIssue,
   type VariableUnits,
   equationLine,
@@ -76,6 +72,8 @@ import { settleNames } from '../editor/names'
 import { settleState } from '../editor/numberUnits'
 import { parseRow } from '../editor/parse'
 import { describeSelection, selectedAtoms, selectionOf } from '../editor/selection'
+import { TOOLBAR, type ToolGroup } from '../editor/toolbar'
+import { isProblem, markKind } from '../editor/marks'
 import { renderMathJson } from '../renderers/mathjson'
 
 const props = withDefaults(
@@ -92,6 +90,17 @@ const props = withDefaults(
     // The workbench's own undo/redo: off, nothing is recorded, the buttons are
     // hidden and Ctrl/Cmd+Z and Y are left to the host.
     history?: boolean
+    // When problems are marked: 'input', as the user types (what is only
+    // missing, on the line being typed, once it is left); 'commit', once the
+    // line is committed (see `line-commit`).
+    validate?: 'input' | 'commit'
+    // Shown, but not editable (setMathML still sets the lines).
+    readonly?: boolean
+    // The active line has the autofocus attribute (for a dialog's focus
+    // management), and is focused when the workbench is mounted.
+    autofocus?: boolean
+    // The cursor and selection readout under the lines.
+    debug?: boolean
   }>(),
   {
     cellml: false,
@@ -100,11 +109,16 @@ const props = withDefaults(
     greekNames: true,
     outputs: true,
     history: true,
+    validate: 'input',
+    readonly: false,
+    autofocus: false,
+    debug: false,
   },
 )
 
 const emit = defineEmits<{
   'equations-change': [lines: EquationLine[], info: EquationsChangeInfo]
+  'line-commit': [line: EquationLine, info: LineCommitInfo]
 }>()
 
 const exportOptions = computed(() => ({ cellml: props.cellml, greekNames: props.greekNames }))
@@ -115,6 +129,11 @@ const equations = ref<EditorState[]>([emptyState()])
 let lineCount = 0
 const newLineId = () => `line-${++lineCount}`
 const lineIds = ref<string[]>([newLineId()])
+// Each line's MathML when last committed, by id ('' if never: an empty line
+// needs no commit). A line whose MathML differs has changed since.
+const committed = ref(new Map<string, string>())
+// What couldn't be read when a line was imported, by id, until it's edited.
+const importProblems = ref(new Map<string, readonly string[]>())
 const activeIndex = ref(0)
 const fieldRefs = ref<Array<InstanceType<typeof MathField> | null>>([])
 
@@ -214,6 +233,13 @@ function handleEdit(index: number, next: EditorState, info: EditInfo) {
 
   pushHistory(index, info)
   setEquation(index, next)
+  edited(index)
+}
+
+// A line's content changed: what was said about its import no longer holds.
+function edited(index: number) {
+  importProblems.value.delete(lineIds.value[index])
+  importNotice.value = null
 }
 
 // Cursor moves and selection changes: not recorded in undo history, but the
@@ -223,44 +249,49 @@ function handleNavigate(index: number, { cursor, anchor }: NavigationState) {
   setEquation(index, { ...equations.value[index], cursor, anchor })
 }
 
-// Every line replaced, one per row (none: one empty line), each with a new id.
-function replaceLines(roots: readonly Row[]) {
+// Every line replaced, one per row (none: one empty line), each with a new id
+// and what couldn't be imported for it. They count as committed.
+function replaceLines(roots: readonly Row[], problems: readonly (readonly string[])[] = []) {
   const states = roots.map((root) =>
     settle({ root, cursor: cursorAtEnd(root), anchor: null }, true),
   )
   equations.value = states.length ? states : [emptyState()]
   lineIds.value = equations.value.map(() => newLineId())
   activeIndex.value = 0
+  importProblems.value = new Map(
+    lineIds.value.flatMap((id, index) => (problems[index]?.length ? [[id, problems[index]]] : [])),
+  )
+  committed.value = new Map(lines.value.map((line) => [line.id, line.mathml]))
 }
 
 // Pasted Content MathML: one equation (or expression) goes in at the caret,
 // like any paste; several replace every line, one line each, as opening them
 // would. Either way it is one undo step, and what couldn't be read is listed.
-const importNotice = ref<{ message: string; problems: string[] } | null>(null)
+// What couldn't be read is kept with its line (and shown as its problem)
+// until the line is edited; the notice says what happened until the next edit.
+const importNotice = ref<string | null>(null)
 
 function handleImport(index: number, result: MathMLImport) {
+  if (props.readonly) return
   const count = result.equations.length
 
   if (count === 1) {
     handleEdit(index, insertAtoms(result.equations[0])(equations.value[index]), OTHER_EDIT)
+    if (result.problems.length) importProblems.value.set(lineIds.value[index], result.problems)
   } else if (count > 1) {
     pushHistory(index)
-    replaceLines(result.equations)
+    replaceLines(result.equations, result.lineProblems)
+    // Each new line is finished with, as if typed and committed.
+    for (const line of lines.value) emit('line-commit', line, { reason: 'paste' })
     focusActive()
   }
 
   importNotice.value =
-    count > 1 || result.problems.length
-      ? {
-          message:
-            count > 1
-              ? `Imported ${count} equations from Content MathML, replacing the lines there were.`
-              : count === 1
-                ? 'Imported the equation from Content MathML.'
-                : 'Nothing was imported.',
-          problems: result.problems,
-        }
-      : null
+    count > 1
+      ? `Imported ${count} equations from Content MathML, replacing the lines there were.`
+      : count === 0
+        ? (result.problems[0] ?? 'Nothing was imported.')
+        : null
 }
 
 // The host sets the lines (exposed): Content MathML with one or more <math>,
@@ -270,11 +301,15 @@ function handleImport(index: number, result: MathMLImport) {
 function setMathML(xml: string): MathMLImport {
   const result = importContentMathML(xml)
   if (!result) {
-    return { equations: [], problems: ["The MathML isn't well-formed XML, so nothing was loaded"] }
+    return {
+      equations: [],
+      problems: ["The MathML isn't well-formed XML, so nothing was loaded"],
+      lineProblems: [],
+    }
   }
 
   changeSource = 'load'
-  replaceLines(result.equations)
+  replaceLines(result.equations, result.lineProblems)
   commandBuffer.value = null
   importNotice.value = null
   undoHistory.clear()
@@ -284,14 +319,20 @@ function setMathML(xml: string): MathMLImport {
 
 defineExpose({ setMathML, focus: focusActive })
 
+onMounted(() => {
+  if (props.autofocus) focusActive()
+})
+
 // Run a command on the active line (toolbar buttons, command mode).
 function run(command: Command) {
+  if (props.readonly) return
   const state = active()
   const next = command(state)
 
   if (next !== state) {
     pushHistory()
     setEquation(activeIndex.value, next)
+    edited(activeIndex.value)
   }
 
   focusActive()
@@ -301,7 +342,10 @@ function run(command: Command) {
 // Lines
 // ---------------------------------------------------------------------------
 
-function addLineAfterActive() {
+// The active line is committed first (Enter, or the "+ Line" button).
+function addLineAfterActive(reason: 'enter' | 'new-line') {
+  if (props.readonly) return
+  commitLine(activeIndex.value, reason)
   pushHistory()
   const index = activeIndex.value + 1
   equations.value.splice(index, 0, emptyState())
@@ -312,13 +356,39 @@ function addLineAfterActive() {
 
 function moveToLine(index: number) {
   if (index < 0 || index >= equations.value.length) return
+  if (index !== activeIndex.value) commitLine(activeIndex.value, 'navigate')
   undoHistory.breakGroup()
   activeIndex.value = index
   focusActive()
 }
 
+// ↑/↓ and moving within the workbench commit through moveToLine; a click
+// on another line lands here.
+function handleLineFocus(index: number) {
+  if (index === activeIndex.value) return
+  commitLine(activeIndex.value, 'navigate')
+  activeIndex.value = index
+}
+
+// Focus leaving the lines for anywhere but another line or a toolbar gallery.
+const stackEl = ref<HTMLElement | null>(null)
+function handleFocusOut(event: FocusEvent) {
+  const to = event.relatedTarget as Element | null
+  if (to && (stackEl.value?.contains(to) || to.closest('[data-me-popover]'))) return
+  commitLine(activeIndex.value, 'blur')
+}
+
+// A line is finished with: the event, if it changed since it was last
+// committed (or loaded).
+function commitLine(index: number, reason: LineCommitInfo['reason']) {
+  const line = lines.value[index]
+  if (!line || (committed.value.get(line.id) ?? '') === line.mathml) return
+  committed.value.set(line.id, line.mathml)
+  emit('line-commit', line, { reason })
+}
+
 function removeActiveLine() {
-  if (equations.value.length <= 1) return
+  if (props.readonly || equations.value.length <= 1) return
 
   pushHistory()
   equations.value.splice(activeIndex.value, 1)
@@ -372,6 +442,7 @@ function handleCaptureKeydown(event: KeyboardEvent) {
     if ((key === 'z' || key === 'y') && props.history) {
       event.preventDefault()
       event.stopPropagation()
+      if (props.readonly) return
       if (key === 'y' || event.shiftKey) redo()
       else undo()
     }
@@ -379,7 +450,7 @@ function handleCaptureKeydown(event: KeyboardEvent) {
     return
   }
 
-  if (event.key === '\\' && !event.altKey) {
+  if (event.key === '\\' && !event.altKey && !props.readonly) {
     event.preventDefault()
     event.stopPropagation()
     commandBuffer.value = ''
@@ -396,7 +467,7 @@ function handleUnusedKey(event: KeyboardEvent) {
   switch (event.key) {
     case 'Enter':
       event.preventDefault()
-      addLineAfterActive()
+      addLineAfterActive('enter')
       return
     case 'ArrowUp':
       event.preventDefault()
@@ -420,67 +491,25 @@ function handleUnusedKey(event: KeyboardEvent) {
 // Toolbar
 // ---------------------------------------------------------------------------
 
-interface ToolButton {
-  latex: string
-  title: string
-  command: Command
+// A group opens its gallery in one shared popover (teleported to the body,
+// so marked for handleFocusOut); a click on an item runs it and closes it.
+const gallery = ref<InstanceType<typeof Popover> | null>(null)
+const galleryGroup = ref<ToolGroup | null>(null)
+
+function openGroup(group: ToolGroup, event: Event) {
+  if (group.command) {
+    run(group.command)
+    return
+  }
+  if (galleryGroup.value?.id !== group.id) gallery.value?.hide()
+  galleryGroup.value = group
+  void nextTick(() => gallery.value?.toggle(event))
 }
 
-const structureButtons: ToolButton[] = [
-  { latex: '\\frac{a}{b}', title: 'Fraction  ( / )', command: insertFraction },
-  { latex: 'x^{n}', title: 'Power  ( ^ )', command: insertSuperscript },
-  { latex: '\\sqrt{x}', title: 'Square root  ( \\sqrt )', command: insertSquareRoot },
-  { latex: '\\sqrt[n]{x}', title: 'nth root  ( \\root )', command: insertNthRoot },
-  { latex: '|x|', title: 'Absolute value  ( | )', command: insertAbs },
-  { latex: '\\lfloor x\\rfloor', title: 'Floor  ( floor( or \\floor )', command: insertFloor },
-  { latex: '\\lceil x\\rceil', title: 'Ceiling  ( ceil( or \\ceil )', command: insertCeiling },
-  {
-    latex: '\\frac{\\mathrm{d}y}{\\mathrm{d}x}',
-    title: 'Derivative  ( \\dd )',
-    command: insertDerivative,
-  },
-  { latex: '\\sin', title: 'Sine  ( sin or \\sin )', command: insertFunction('sin') },
-  {
-    latex: '\\begin{cases}a&p\\\\b&q\\end{cases}',
-    title: 'Piecewise  ( \\cases )',
-    command: insertPiecewise,
-  },
-]
-
-const operatorButtons: ToolButton[] = [
-  { latex: '+', title: 'Add  ( + )', command: insertSymbol('+') },
-  { latex: '-', title: 'Subtract  ( - )', command: insertSymbol('-') },
-  { latex: '\\times', title: 'Multiply  ( * )', command: insertSymbol('·') },
-  { latex: '=', title: 'Equals  ( = )', command: insertSymbol('=') },
-]
-
-// Constants (CellML's <pi/>, <exponentiale/>, <infinity/>).
-const constantButtons: ToolButton[] = [
-  { latex: '\\pi', title: 'Pi  ( \\pi )', command: insertSymbol('pi') },
-  {
-    latex: '\\mathrm{e}',
-    title: "Euler's number e  ( \\e )",
-    command: insertSymbol('exponentiale'),
-  },
-  { latex: '\\infty', title: 'Infinity  ( \\inf )', command: insertSymbol('infinity') },
-]
-
-// Comparisons and logic, for conditions.
-const conditionButtons: ToolButton[] = [
-  { latex: '<', title: 'Less than  ( < )', command: insertSymbol('<') },
-  { latex: '\\leq', title: 'Less than or equal  ( <= or \\le )', command: insertSymbol('≤') },
-  { latex: '>', title: 'Greater than  ( > )', command: insertSymbol('>') },
-  {
-    latex: '\\geq',
-    title: 'Greater than or equal  ( >= or \\ge )',
-    command: insertSymbol('≥'),
-  },
-  { latex: '\\neq', title: 'Not equal  ( != or \\ne )', command: insertSymbol('≠') },
-  { latex: '\\land', title: 'And  ( & or \\and )', command: insertSymbol('∧') },
-  { latex: '\\lor', title: 'Or  ( \\or )', command: insertSymbol('∨') },
-  { latex: '\\lnot', title: 'Not  ( ! or \\not )', command: insertSymbol('¬') },
-  { latex: '\\veebar', title: 'Exclusive or  ( \\xor )', command: insertSymbol('⊻') },
-]
+function runFromGallery(command: Command) {
+  gallery.value?.hide()
+  run(command)
+}
 
 function buttonHtml(latex: string): string {
   return katex.renderToString(latex, { throwOnError: false, strict: 'ignore' })
@@ -507,10 +536,25 @@ function parseLine(root: Row) {
 const parsedLines = computed(() => equations.value.map((equation) => parseLine(equation.root)))
 const parsed = computed(() => parsedLines.value[activeIndex.value] ?? null)
 
+// A problem found outside the parse: in CellML mode, a line that isn't an
+// equation (only equations may be written at the top level of <math>).
+const NOT_AN_EQUATION = 'A CellML line must be an equation (… = …)'
+function cellmlProblem(root: Row, index: number): (Mark & { incomplete: true }) | null {
+  const ast = parsedLines.value[index]?.ast
+  if (!props.cellml || !ast || ast.type === 'Equal') return null
+  return { message: NOT_AN_EQUATION, atomIds: root.map((atom) => atom.id), incomplete: true }
+}
+
 // Each line's marks: its parse problems, the host's units issues for it, and
-// units hints if the host gave variable units. Cached by row, and rebuilt
-// when the issues or units change, so moving the cursor hands MathField the
-// same array.
+// units hints if the host gave variable units, in three sets: all of them,
+// all but what is only missing (incomplete), and the hints alone. Cached by
+// row, and rebuilt when the issues, units or mode change, so moving the
+// cursor hands MathField the same arrays.
+interface LineMarkSets {
+  all: Mark[]
+  complete: Mark[]
+  hints: Mark[]
+}
 const issuesByLine = computed(() => {
   const byLine = new Map<string, UnitsIssue[]>()
   for (const issue of props.issues) {
@@ -519,38 +563,125 @@ const issuesByLine = computed(() => {
   return byLine
 })
 const marksCache = computed(() => {
-  // Read here so the cache is replaced when either changes.
+  // Read here so the cache is replaced when any changes.
   void issuesByLine.value
   void props.variableUnits
-  return new WeakMap<Row, Mark[]>()
+  void props.cellml
+  return new WeakMap<Row, LineMarkSets>()
 })
-const lineMarks = computed(() =>
+const markSets = computed(() =>
   equations.value.map((equation, index) => {
     const root = equation.root
-    let marks = marksCache.value.get(root)
-    if (!marks) {
-      marks = [
+    let sets = marksCache.value.get(root)
+    if (!sets) {
+      const cellml = cellmlProblem(root, index)
+      const problems: Array<Mark & { incomplete?: true }> = [
         ...(parsedLines.value[index]?.diagnostics ?? []),
+        ...(cellml ? [cellml] : []),
         ...unitsIssueMarks(root, issuesByLine.value.get(lineIds.value[index]) ?? []),
-        ...unitsHintMarks(root, props.variableUnits ?? null),
       ]
-      marksCache.value.set(root, marks)
+      const hints = unitsHintMarks(root, props.variableUnits ?? null)
+      sets = {
+        all: [...problems, ...hints],
+        complete: [...problems.filter((mark) => !mark.incomplete), ...hints],
+        hints,
+      }
+      marksCache.value.set(root, sets)
     }
-    return marks
+    return sets
   }),
 )
-const unitsIssues = computed(() => issuesByLine.value.get(lineIds.value[activeIndex.value]) ?? [])
+
+// Which of a line's problems show (see the `validate` prop). In 'commit'
+// mode, a line's show while it is as last committed; in 'input' mode, all
+// do, but what is only missing waits until the line is left.
+function shownSet(index: number): keyof LineMarkSets {
+  if (props.validate === 'commit') {
+    const line = lines.value[index]
+    return (committed.value.get(line.id) ?? '') === line.mathml ? 'all' : 'hints'
+  }
+  return index === activeIndex.value ? 'complete' : 'all'
+}
+const lineMarks = computed(() => markSets.value.map((sets, index) => sets[shownSet(index)]))
+
+// Each line's shown problems, for its outline and the status bar: its marks'
+// and what couldn't be imported.
+interface LineProblem {
+  line: number
+  message: string
+  kind: 'error' | 'units'
+}
+const lineProblems = computed(() =>
+  lineMarks.value.map((marks, index): LineProblem[] => {
+    const imported =
+      shownSet(index) === 'hints' ? [] : (importProblems.value.get(lineIds.value[index]) ?? [])
+    const problems: LineProblem[] = [
+      ...imported.map((message) => ({ line: index, message, kind: 'error' as const })),
+      ...marks.filter(isProblem).map((mark) => ({
+        line: index,
+        message: mark.message,
+        kind: markKind(mark) === 'units' ? ('units' as const) : ('error' as const),
+      })),
+    ]
+    // Once each: a units issue underlines every place a variable appears.
+    return problems.filter(
+      (problem, at) => problems.findIndex((other) => other.message === problem.message) === at,
+    )
+  }),
+)
+const rowProblemClass = (index: number) => {
+  const problems = lineProblems.value[index]
+  if (!problems.length) return null
+  return problems.some((problem) => problem.kind === 'error') ? 'has-error' : 'has-units-issue'
+}
+
+// The status bar: the command being typed; else the active line's first
+// problem, or the first anywhere, and how many more; else the import notice.
+const status = computed(() => {
+  if (commandBuffer.value !== null) return { kind: 'command' as const, text: commandBuffer.value }
+  const all = lineProblems.value.flat()
+  const first = lineProblems.value[activeIndex.value][0] ?? all[0]
+  if (first) {
+    return {
+      kind: first.kind,
+      text: `Line ${first.line + 1}: ${first.message}`,
+      more: all.length - 1,
+      line: first.line,
+    }
+  }
+  if (importNotice.value) return { kind: 'info' as const, text: importNotice.value }
+  return null
+})
+
+// Every shown problem, one a line, on hover.
+const statusTitle = computed(() =>
+  lineProblems.value
+    .flat()
+    .map((problem) => `Line ${problem.line + 1}: ${problem.message}`)
+    .join('\n'),
+)
+
+function goToStatusLine() {
+  const line = status.value?.line
+  if (line !== undefined) moveToLine(line)
+}
 
 // Every line for the `equations-change` event, emitted when any line's
 // content (not just its cursor) changes.
-const lineCache = new WeakMap<Row, EquationLine>()
+const lineCache = computed(() => {
+  void importProblems.value.size
+  void props.cellml
+  return new WeakMap<Row, EquationLine>()
+})
 const lines = computed(() =>
   equations.value.map((equation, index) => {
     const id = lineIds.value[index]
-    let line = lineCache.get(equation.root)
+    let line = lineCache.value.get(equation.root)
     if (!line || line.id !== id) {
-      line = equationLine(id, equation.root, parsedLines.value[index])
-      lineCache.set(equation.root, line)
+      const other =
+        (importProblems.value.get(id)?.length ?? 0) + (cellmlProblem(equation.root, index) ? 1 : 0)
+      line = equationLine(id, equation.root, parsedLines.value[index], other)
+      lineCache.value.set(equation.root, line)
     }
     return line
   }),
@@ -573,7 +704,6 @@ watch(
 )
 
 const ast = computed(() => parsed.value?.ast ?? null)
-const diagnostics = computed(() => parsed.value?.diagnostics ?? [])
 // The same LaTeX as copying and "Copy as LaTeX" produce.
 const latex = computed(() =>
   ast.value ? exportRow(active().root, 'latex', exportOptions.value) : '',
@@ -682,241 +812,218 @@ function toggleCopyMenu(event: Event) {
 <template>
   <section
     class="editor-grid"
-    :class="{ 'has-side': !!$slots.side, 'no-outputs': !outputs }"
+    :class="{ 'has-side': !!$slots.side, 'no-outputs': !outputs, readonly }"
     @keydown.capture="handleCaptureKeydown"
   >
-    <Card class="editor-card">
-      <template #title>
-        <div class="header-row">
-          <span>Equation Builder</span>
-          <Tag severity="info" value="AST First" />
-        </div>
-      </template>
-
-      <template #subtitle>
-        Type as you would write it; the structure is worked out as you go.
-      </template>
-
-      <template #content>
-        <div class="toolbar">
-          <div class="toolbar-group">
-            <button
-              v-for="item in structureButtons"
-              :key="item.title"
-              type="button"
-              class="tool-button"
-              :title="item.title"
-              @mousedown.prevent
-              @click="run(item.command)"
-            >
-              <span v-html="buttonHtml(item.latex)"></span>
-            </button>
-          </div>
-
-          <div class="toolbar-group">
-            <button
-              v-for="item in operatorButtons"
-              :key="item.title"
-              type="button"
-              class="tool-button tool-button-op"
-              :title="item.title"
-              @mousedown.prevent
-              @click="run(item.command)"
-            >
-              <span v-html="buttonHtml(item.latex)"></span>
-            </button>
-          </div>
-
-          <div class="toolbar-group" data-role="constant-buttons">
-            <button
-              v-for="item in constantButtons"
-              :key="item.title"
-              type="button"
-              class="tool-button tool-button-op"
-              :title="item.title"
-              @mousedown.prevent
-              @click="run(item.command)"
-            >
-              <span v-html="buttonHtml(item.latex)"></span>
-            </button>
-          </div>
-
-          <div class="toolbar-group" data-role="condition-buttons">
-            <button
-              v-for="item in conditionButtons"
-              :key="item.title"
-              type="button"
-              class="tool-button tool-button-op"
-              :title="item.title"
-              @mousedown.prevent
-              @click="run(item.command)"
-            >
-              <span v-html="buttonHtml(item.latex)"></span>
-            </button>
-          </div>
-
-          <div class="toolbar-group">
-            <Button
-              v-if="props.history"
-              icon="pi pi-undo"
-              size="small"
-              text
-              title="Undo (Ctrl+Z)"
-              :disabled="!canUndo"
-              @mousedown.prevent
-              @click="undo"
-            />
-            <Button
-              v-if="props.history"
-              icon="pi pi-refresh"
-              size="small"
-              text
-              title="Redo (Ctrl+Shift+Z)"
-              :disabled="!canRedo"
-              @mousedown.prevent
-              @click="redo"
-            />
-            <Button
-              icon="pi pi-plus"
-              label="Line"
-              size="small"
-              text
-              title="Add equation line (Enter)"
-              @mousedown.prevent
-              @click="addLineAfterActive"
-            />
-            <Button
-              icon="pi pi-trash"
-              size="small"
-              text
-              severity="danger"
-              title="Remove equation line"
-              :disabled="equations.length <= 1"
-              @mousedown.prevent
-              @click="removeActiveLine"
-            />
-          </div>
-
-          <div v-if="outputs" class="toolbar-group">
-            <Button
-              icon="pi pi-copy"
-              :label="copyAsLabel"
-              size="small"
-              text
-              title="Copy the selection, or the whole equation, as LaTeX, MathJSON or Content MathML"
-              aria-haspopup="true"
-              aria-controls="copy-as-menu"
-              data-role="copy-as"
-              :disabled="!canCopyAs"
-              @mousedown.prevent
-              @click="toggleCopyMenu"
-            />
-            <Menu id="copy-as-menu" ref="copyMenu" :model="copyAsItems" :popup="true" />
-          </div>
-        </div>
-
-        <Divider />
-
-        <div class="equations-stack" @keydown="handleUnusedKey">
-          <div
-            v-for="(equation, index) in equations"
-            :key="lineIds[index]"
-            class="equation-row"
-            :class="{ active: index === activeIndex }"
-            :data-line="index"
-            :data-line-id="lineIds[index]"
-            @focusin="activeIndex = index"
+    <div class="editor-panel">
+      <!-- Sticky: it stays in view while the lines scroll under it. -->
+      <div class="toolbar" role="toolbar" aria-label="Equation tools">
+        <div class="toolbar-group">
+          <button
+            v-for="group in TOOLBAR"
+            :key="group.id"
+            type="button"
+            class="tool-button"
+            :class="{ 'has-gallery': !!group.sections }"
+            :title="group.title"
+            :data-role="`toolbar-${group.id}`"
+            :aria-haspopup="group.sections ? 'true' : undefined"
+            :disabled="readonly"
+            @mousedown.prevent
+            @click="openGroup(group, $event)"
           >
-            <div class="equation-label">{{ index + 1 }}</div>
+            <span v-html="buttonHtml(group.latex)"></span>
+            <i v-if="group.sections" class="pi pi-chevron-down tool-chevron" aria-hidden="true"></i>
+          </button>
+        </div>
 
-            <MathField
-              :ref="(el) => (fieldRefs[index] = el as InstanceType<typeof MathField> | null)"
-              class="equation-field"
-              :model-value="equation.root"
-              :cursor="equation.cursor"
-              :anchor="equation.anchor ?? null"
-              :active="index === activeIndex"
-              :marks="lineMarks[index]"
-              :greek-names="greekNames"
-              @navigate="handleNavigate(index, $event)"
-              @edit="(state, info) => handleEdit(index, state, info)"
-              @import="handleImport(index, $event)"
-            />
+        <div class="toolbar-group toolbar-lines">
+          <Button
+            icon="pi pi-plus"
+            size="small"
+            text
+            title="Add equation line (Enter)"
+            aria-label="Add equation line"
+            data-role="add-line"
+            :disabled="readonly"
+            @mousedown.prevent
+            @click="addLineAfterActive('new-line')"
+          />
+          <Button
+            icon="pi pi-trash"
+            size="small"
+            text
+            severity="danger"
+            title="Remove equation line"
+            aria-label="Remove equation line"
+            :disabled="readonly || equations.length <= 1"
+            @mousedown.prevent
+            @click="removeActiveLine"
+          />
+          <Button
+            v-if="props.history"
+            icon="pi pi-undo"
+            size="small"
+            text
+            title="Undo (Ctrl+Z)"
+            :disabled="readonly || !canUndo"
+            @mousedown.prevent
+            @click="undo"
+          />
+          <Button
+            v-if="props.history"
+            icon="pi pi-refresh"
+            size="small"
+            text
+            title="Redo (Ctrl+Shift+Z)"
+            :disabled="readonly || !canRedo"
+            @mousedown.prevent
+            @click="redo"
+          />
+        </div>
+
+        <div v-if="outputs" class="toolbar-group">
+          <Button
+            icon="pi pi-copy"
+            :label="copyAsLabel"
+            size="small"
+            text
+            title="Copy the selection, or the whole equation, as LaTeX, MathJSON or Content MathML"
+            aria-haspopup="true"
+            aria-controls="copy-as-menu"
+            data-role="copy-as"
+            :disabled="!canCopyAs"
+            @mousedown.prevent
+            @click="toggleCopyMenu"
+          />
+          <Menu id="copy-as-menu" ref="copyMenu" :model="copyAsItems" :popup="true" />
+        </div>
+      </div>
+
+      <Popover ref="gallery" data-me-popover data-role="gallery" class="me-gallery">
+        <div v-if="galleryGroup" class="gallery">
+          <div
+            v-for="(section, sectionIndex) in galleryGroup.sections"
+            :key="sectionIndex"
+            class="gallery-section"
+          >
+            <div v-if="section.label" class="gallery-label">{{ section.label }}</div>
+            <div class="gallery-items">
+              <button
+                v-for="item in section.items"
+                :key="item.title"
+                type="button"
+                class="tool-button"
+                :title="item.title"
+                @mousedown.prevent
+                @click="runFromGallery(item.command)"
+              >
+                <span v-html="buttonHtml(item.latex)"></span>
+              </button>
+            </div>
           </div>
         </div>
+      </Popover>
 
-        <div v-if="commandBuffer !== null" class="command-chip" data-role="command">
-          <span class="command-slash">\</span>{{ commandBuffer }}<span class="command-caret"></span>
+      <div
+        ref="stackEl"
+        class="equations-stack"
+        @keydown="handleUnusedKey"
+        @focusout="handleFocusOut"
+      >
+        <div
+          v-for="(equation, index) in equations"
+          :key="lineIds[index]"
+          class="equation-row"
+          :class="[{ active: index === activeIndex }, rowProblemClass(index)]"
+          :data-line="index"
+          :data-line-id="lineIds[index]"
+          @focusin="handleLineFocus(index)"
+        >
+          <div class="equation-label">{{ index + 1 }}</div>
+
+          <MathField
+            :ref="(el) => (fieldRefs[index] = el as InstanceType<typeof MathField> | null)"
+            class="equation-field"
+            :model-value="equation.root"
+            :cursor="equation.cursor"
+            :anchor="equation.anchor ?? null"
+            :active="index === activeIndex"
+            :readonly="readonly"
+            :autofocus="autofocus && index === activeIndex ? true : undefined"
+            :marks="lineMarks[index]"
+            :greek-names="greekNames"
+            @navigate="handleNavigate(index, $event)"
+            @edit="(state, info) => handleEdit(index, state, info)"
+            @import="handleImport(index, $event)"
+          />
         </div>
-        <p v-else class="focus-meta">
-          Cursor: <span data-role="cursor">{{ cursorLabel }}</span>
-          <template v-if="selectionLabel">
-            · Selection: <span data-role="selection">{{ selectionLabel }}</span>
-          </template>
+      </div>
+
+      <!-- Always there, one line high, so the lines never move when a problem
+           appears or goes. -->
+      <div
+        class="status-bar"
+        :class="status ? `status-${status.kind}` : null"
+        data-role="status"
+        :data-kind="status?.kind"
+        :title="statusTitle || undefined"
+        role="status"
+        @mousedown.prevent
+        @click="goToStatusLine"
+      >
+        <template v-if="status?.kind === 'command'">
+          <span class="command-chip" data-role="command"
+            ><span class="command-slash">\</span>{{ status.text }}<span class="command-caret"></span
+          ></span>
+        </template>
+        <template v-else-if="status">
+          <span class="status-text">{{ status.text }}</span>
+          <span v-if="status.more" class="status-more">+{{ status.more }} more</span>
+        </template>
+      </div>
+
+      <p v-if="debug" class="focus-meta">
+        Cursor: <span data-role="cursor">{{ cursorLabel }}</span>
+        <template v-if="selectionLabel">
+          · Selection: <span data-role="selection">{{ selectionLabel }}</span>
+        </template>
+      </p>
+
+      <details class="key-help" data-role="key-help">
+        <summary>Keys and typing</summary>
+        <p class="key-hint">
+          <kbd>←</kbd><kbd>→</kbd> move through every position · <kbd>↑</kbd
+          ><kbd>↓</kbd> numerator/denominator, else previous/next line · <kbd>Home</kbd
+          ><kbd>End</kbd> start/end · <kbd>Tab</kbd> next empty slot · <kbd>Space</kbd> step out of
+          a fraction, exponent or bracket · <kbd>Enter</kbd> new line (in a piecewise: new piece;
+          <kbd>Backspace</kbd> in an empty piece removes it; <code>\otherwise</code> adds one)
         </p>
-
-        <ul v-if="diagnostics.length" class="diagnostics" data-role="diagnostics">
-          <li v-for="(problem, index) in diagnostics" :key="index">{{ problem.message }}</li>
-        </ul>
-        <div v-if="importNotice" class="import-notice" data-role="import-notice">
-          <div class="import-notice-head">
-            <span>{{ importNotice.message }}</span>
-            <Button
-              icon="pi pi-times"
-              size="small"
-              text
-              rounded
-              severity="secondary"
-              aria-label="Dismiss"
-              @mousedown.prevent
-              @click="importNotice = null"
-            />
-          </div>
-          <ul v-if="importNotice.problems.length">
-            <li v-for="problem in importNotice.problems" :key="problem">{{ problem }}</li>
-          </ul>
-        </div>
-        <ul v-if="unitsIssues.length" class="diagnostics units-issues" data-role="units-issues">
-          <li v-for="(issue, index) in unitsIssues" :key="index">{{ issue.message }}</li>
-        </ul>
-
-        <details class="key-help" data-role="key-help">
-          <summary>Keys and typing</summary>
-          <p class="key-hint">
-            <kbd>←</kbd><kbd>→</kbd> move through every position · <kbd>↑</kbd
-            ><kbd>↓</kbd> numerator/denominator, else previous/next line · <kbd>Home</kbd
-            ><kbd>End</kbd> start/end · <kbd>Tab</kbd> next empty slot · <kbd>Space</kbd> step out
-            of a fraction, exponent or bracket · <kbd>Enter</kbd> new line (in a piecewise: new
-            piece; <kbd>Backspace</kbd> in an empty piece removes it; <code>\otherwise</code> adds
-            one)
-          </p>
-          <p class="key-hint">
-            Select with <kbd>Shift</kbd>+<kbd>←</kbd><kbd>→</kbd>, <kbd>Shift</kbd>+<kbd>Home</kbd
-            ><kbd>End</kbd>, <kbd>Ctrl</kbd>+<kbd>A</kbd> or by dragging · <code>/</code>,
-            <code>^</code>, <code>(</code>, <code>|</code>, <code>\sqrt</code>, <code>\sin</code>, …
-            or a toolbar button then wraps the selection · typing replaces it ·
-            <kbd>Esc</kbd> clears it · <kbd>Ctrl</kbd>+<kbd>C</kbd>/<kbd>X</kbd>/<kbd>V</kbd> copy,
-            cut and paste (copies as LaTeX for other apps; pastes LaTeX or plain text such as
-            <code>(x+1)/2</code>)
-          </p>
-          <p class="key-hint">
-            Type letters, numbers and <code>+ − * = ,</code> where the caret is · conditions:
-            <code>&lt; &gt; &lt;= &gt;= !=</code>, <code>&amp;</code> (∧), <code>!</code> (¬),
-            <code>\or</code> (∨) · <code>/</code> makes a fraction of what's before the caret ·
-            <code>^</code> exponent · <code>( )</code> and <code>| |</code> brackets ·
-            <code>0.25{mV}</code> a number's units · letters, digits and <code>_</code> with no
-            operator between them are one name (<code>Vm_init</code>); multiply names with
-            <code>*</code> (<code>a*b</code>) · a name spelling a function (<code>sin</code>,
-            <code>cosh</code>, …) is that function · <code>\</code> commands (<code
-              >\frac \sqrt \root \abs \dd \cases \sin \pi \e \inf \alpha</code
-            >
-            …) · <kbd>Backspace</kbd>/<kbd>Delete</kbd> delete<template v-if="props.history">
-              · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo</template
-            >
-          </p>
-        </details>
-      </template>
-    </Card>
+        <p class="key-hint">
+          Select with <kbd>Shift</kbd>+<kbd>←</kbd><kbd>→</kbd>, <kbd>Shift</kbd>+<kbd>Home</kbd
+          ><kbd>End</kbd>, <kbd>Ctrl</kbd>+<kbd>A</kbd> or by dragging · <code>/</code>,
+          <code>^</code>, <code>(</code>, <code>|</code>, <code>\sqrt</code>, <code>\sin</code>, …
+          or a toolbar button then wraps the selection · typing replaces it · <kbd>Esc</kbd> clears
+          it · <kbd>Ctrl</kbd>+<kbd>C</kbd>/<kbd>X</kbd>/<kbd>V</kbd> copy, cut and paste (copies as
+          LaTeX for other apps; pastes LaTeX or plain text such as <code>(x+1)/2</code>)
+        </p>
+        <p class="key-hint">
+          Type letters, numbers and <code>+ − * = ,</code> where the caret is · conditions:
+          <code>&lt; &gt; &lt;= &gt;= !=</code>, <code>&amp;</code> (∧), <code>!</code> (¬),
+          <code>\or</code> (∨) · <code>/</code> makes a fraction of what's before the caret ·
+          <code>^</code> exponent · <code>( )</code> and <code>| |</code> brackets ·
+          <code>0.25{mV}</code> a number's units · letters, digits and <code>_</code> with no
+          operator between them are one name (<code>Vm_init</code>); multiply names with
+          <code>*</code> (<code>a*b</code>) · a name spelling a function (<code>sin</code>,
+          <code>cosh</code>, …) is that function · <code>\</code> commands (<code
+            >\frac \sqrt \root \abs \dd \cases \sin \pi \e \inf \alpha</code
+          >
+          …) · <kbd>Backspace</kbd>/<kbd>Delete</kbd> delete<template v-if="props.history">
+            · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo</template
+          >
+        </p>
+      </details>
+    </div>
 
     <!-- The host's side content, beside the editor (a units panel, say); the
          outputs then go under the editor. Without it, the outputs go beside. -->
@@ -975,8 +1082,10 @@ function toggleCopyMenu(event: Event) {
 <style scoped>
 /* Colours follow the host's PrimeVue theme (light or dark), with light
    fallbacks. The accent is the editor's own blue unless the host sets
-   --math-editor-accent. */
-.editor-grid {
+   --math-editor-accent. The gallery is teleported out of the grid, so it
+   gets them too. */
+.editor-grid,
+.gallery {
   --me-accent: var(--math-editor-accent, #2563eb);
   --me-surface: var(--p-content-background, #ffffff);
   --me-subtle: var(--p-content-hover-background, #f1f5f9);
@@ -987,6 +1096,7 @@ function toggleCopyMenu(event: Event) {
   /* Notices: a tint of the colour behind, text part way to the theme's. */
   --me-warn: #d97706;
   --me-caution: #ea580c;
+  --me-danger: #dc2626;
 
   max-width: 1240px;
   margin: 0 auto;
@@ -1018,9 +1128,14 @@ function toggleCopyMenu(event: Event) {
   grid-template-areas: 'editor side';
 }
 
-.editor-card {
+.editor-panel {
   grid-area: editor;
   min-width: 0;
+  padding: 0 1rem 0.85rem;
+  border: 1px solid var(--me-border);
+  border-radius: 0.75rem;
+  background: var(--me-surface);
+  color: var(--me-text);
 }
 
 .output-card {
@@ -1036,46 +1151,46 @@ function toggleCopyMenu(event: Event) {
   min-width: 0;
 }
 
-.header-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.preview-title-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 0.75rem;
-}
-
 .toolbar {
+  /* Stays at the top of whatever scrolls the lines (the page, a dialog). */
+  position: sticky;
+  top: var(--me-toolbar-top, 0);
+  z-index: 2;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.9rem;
+  gap: 0.35rem 0.75rem;
+  margin: 0 0 0.6rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--me-border);
+  background: var(--me-surface);
 }
 
 .toolbar-group {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.35rem;
+  gap: 0.25rem;
+}
+
+.toolbar-lines :deep(.p-button) {
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
 }
 
 .tool-button {
-  min-width: 2.6rem;
-  height: 2.6rem;
-  padding: 0.25rem 0.5rem;
+  min-width: 2rem;
+  height: 2rem;
+  padding: 0 0.35rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border: 1px solid var(--me-border-strong);
-  border-radius: 0.5rem;
+  border-radius: 0.45rem;
   background: var(--me-surface);
   color: var(--me-text);
-  font-size: 0.82rem;
+  font-size: 0.72rem;
   cursor: pointer;
   transition:
     border-color 0.12s ease,
@@ -1083,7 +1198,18 @@ function toggleCopyMenu(event: Event) {
     box-shadow 0.12s ease;
 }
 
-.tool-button:hover {
+.tool-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.tool-chevron {
+  margin-left: 0.2rem;
+  font-size: 0.55rem;
+  color: var(--me-muted);
+}
+
+.tool-button:hover:not(:disabled) {
   border-color: var(--me-accent);
   background: color-mix(in srgb, var(--me-accent) 8%, var(--me-surface));
 }
@@ -1092,10 +1218,28 @@ function toggleCopyMenu(event: Event) {
   box-shadow: inset 0 1px 3px rgba(15, 23, 42, 0.15);
 }
 
-.tool-button-op {
-  min-width: 2.2rem;
-  height: 2.2rem;
-  font-size: 0.95rem;
+.gallery {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: 22rem;
+}
+
+.gallery-label {
+  margin-bottom: 0.25rem;
+  color: var(--me-muted);
+  font-size: 0.72rem;
+}
+
+.gallery-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.gallery .tool-button {
+  min-width: 2.4rem;
+  font-size: 0.8rem;
 }
 
 .equations-stack {
@@ -1122,6 +1266,23 @@ function toggleCopyMenu(event: Event) {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--me-accent) 12%, transparent);
 }
 
+/* A line with problems: outlined (red, or amber for units only). */
+.equation-row.has-error {
+  border-color: var(--me-danger);
+}
+
+.equation-row.has-units-issue {
+  border-color: var(--me-warn);
+}
+
+.equation-row.active.has-error {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--me-danger) 14%, transparent);
+}
+
+.equation-row.active.has-units-issue {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--me-warn) 16%, transparent);
+}
+
 .equation-label {
   display: flex;
   align-items: center;
@@ -1142,11 +1303,59 @@ function toggleCopyMenu(event: Event) {
   box-shadow: none;
 }
 
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: 1.75rem;
+  margin-top: 0.5rem;
+  padding: 0 0.6rem;
+  border-radius: 0.45rem;
+  font-size: 0.8rem;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.status-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status-more {
+  flex: none;
+  opacity: 0.75;
+}
+
+.status-error,
+.status-units {
+  cursor: pointer;
+}
+
+.status-error {
+  background: color-mix(in srgb, var(--me-danger) 12%, var(--me-surface));
+  color: color-mix(in srgb, var(--me-danger) 55%, var(--me-text));
+}
+
+.status-units {
+  background: color-mix(in srgb, var(--me-caution) 14%, var(--me-surface));
+  color: color-mix(in srgb, var(--me-caution) 55%, var(--me-text));
+}
+
+.status-info {
+  background: color-mix(in srgb, var(--me-accent) 8%, var(--me-surface));
+  color: color-mix(in srgb, var(--me-accent) 45%, var(--me-text));
+}
+
+.status-command {
+  padding: 0;
+}
+
 .command-chip {
   display: inline-flex;
   align-items: center;
-  margin-top: 0.75rem;
-  padding: 0.25rem 0.6rem;
+  height: 100%;
+  padding: 0 0.6rem;
   border-radius: 0.45rem;
   background: #0f172a;
   color: #e2e8f0;
@@ -1176,42 +1385,6 @@ function toggleCopyMenu(event: Event) {
   margin: 0.75rem 0 0;
   color: var(--me-muted);
   font-size: 0.8rem;
-}
-
-.diagnostics {
-  margin: 0.5rem 0 0;
-  padding: 0.4rem 0.6rem 0.4rem 1.6rem;
-  border-radius: 0.45rem;
-  background: color-mix(in srgb, var(--me-warn) 16%, var(--me-surface));
-  color: color-mix(in srgb, var(--me-warn) 55%, var(--me-text));
-  font-size: 0.8rem;
-}
-
-.import-notice {
-  margin: 0.5rem 0 0;
-  padding: 0.35rem 0.6rem;
-  border-radius: 0.5rem;
-  background: color-mix(in srgb, var(--me-accent) 8%, var(--me-surface));
-  color: color-mix(in srgb, var(--me-accent) 45%, var(--me-text));
-  font-size: 0.8rem;
-}
-
-.import-notice-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
-
-.import-notice ul {
-  margin: 0.2rem 0 0.1rem;
-  padding-left: 1.1rem;
-  color: color-mix(in srgb, var(--me-caution) 55%, var(--me-text));
-}
-
-.units-issues {
-  background: color-mix(in srgb, var(--me-caution) 14%, var(--me-surface));
-  color: color-mix(in srgb, var(--me-caution) 55%, var(--me-text));
 }
 
 .output-actions {

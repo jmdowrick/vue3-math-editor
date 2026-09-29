@@ -30,6 +30,26 @@ export class Workbench {
     )
   }
 
+  // The status bar under the lines: the first problem, the command being
+  // typed, or a notice.
+  status(): Locator {
+    return this.page.locator('[data-role="status"]')
+  }
+
+  // Every problem shown (the status bar's title), without "Line N: ".
+  async problems(): Promise<string[]> {
+    const title = (await this.status().getAttribute('title')) ?? ''
+    return title ? title.split('\n').map((text) => text.replace(/^Line \d+: /, '')) : []
+  }
+
+  // Click a toolbar item: a group's button, or an item in its gallery.
+  async tool(group: string, title?: string): Promise<void> {
+    await this.page.locator(`[data-role="toolbar-${group}"]`).click()
+    if (title) {
+      await this.page.locator('[data-role="gallery"]').locator(`button[title^="${title}"]`).click()
+    }
+  }
+
   line(index = 0): Locator {
     return this.page.locator(`[data-line="${index}"] .math-field`)
   }

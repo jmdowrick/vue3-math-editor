@@ -20,7 +20,8 @@ const paste = async (text: string) => {
   await wb.press('ControlOrMeta+v')
 }
 
-const notice = () => wb.page.locator('[data-role="import-notice"]')
+// What the status bar says (the import's notice, or a line's problem).
+const notice = () => wb.status()
 // The lines' CellML-mode MathML, as the workbench reports it.
 const lineMathml = (index: number) =>
   wb.page.evaluate(
@@ -47,7 +48,7 @@ test('one equation goes in at the caret, with its numbers’ units', async () =>
   await paste('<apply><plus/><ci>x</ci><cn cellml:units="mV">2.5</cn></apply>')
   await wb.expectMathJson(['Equal', 'y', ['Add', 'x', 2.5]])
   await expect(wb.line(0).locator('.me-units-flag')).toHaveCount(1)
-  await expect(notice()).toHaveCount(0)
+  await expect(notice()).toBeEmpty()
   expect(await lineMathml(0)).toContain('<cn cellml:units="mV">2.5</cn>')
 })
 
@@ -58,6 +59,14 @@ test('several equations replace every line, in one undo step', async () => {
   await paste(MODEL)
 
   await expect(wb.lines()).toHaveCount(3)
+  // Each new line is committed, as a paste.
+  expect(
+    await wb.page.evaluate(() =>
+      (
+        window as unknown as { __workbench: { commits: { reason: string }[] } }
+      ).__workbench.commits.map((commit) => commit.reason),
+    ),
+  ).toEqual(['enter', 'paste', 'paste', 'paste'])
   await expect(notice()).toContainText('Imported 3 equations')
   await expect(wb.line(1)).toContainText('I_ion')
   expect(await lineMathml(2)).toContain('<cn cellml:units="mV">77</cn>')
@@ -69,19 +78,29 @@ test('several equations replace every line, in one undo step', async () => {
   await expect(wb.line(0)).toContainText('a')
 })
 
-test('what can’t be read is left empty and listed', async () => {
+test('what can’t be read is left out, and a problem of its line until it is edited', async () => {
   await paste(
     '<math xmlns="http://www.w3.org/1998/Math/MathML"><apply><eq/><ci>y</ci><apply><factorial/><ci>n</ci></apply></apply></math>',
   )
-  await expect(notice()).toContainText("<factorial> isn't supported")
-  await notice().getByRole('button', { name: 'Dismiss' }).click()
-  await expect(notice()).toHaveCount(0)
+  await expect(wb.line(0)).not.toContainText('(')
+  await expect(notice()).toContainText("Line 1: <factorial> isn't supported")
+  await expect(wb.page.locator('[data-line="0"]')).toHaveClass(/has-error/)
+  expect(
+    await wb.page.evaluate(
+      () =>
+        (window as never as { __workbench: { lines: { complete: boolean }[] } }).__workbench
+          .lines[0].complete,
+    ),
+  ).toBe(false)
+
+  await wb.type('2')
+  await expect(notice()).toBeEmpty()
+  await expect(wb.page.locator('[data-line="0"]')).not.toHaveClass(/has-error/)
 })
 
 test('MathML that isn’t well-formed imports nothing', async () => {
   await wb.type('x')
   await paste('<math><apply><eq/>')
-  await expect(notice()).toContainText('Nothing was imported')
   await expect(notice()).toContainText("isn't well-formed")
   await wb.expectMathJson('x')
 })

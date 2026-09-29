@@ -72,7 +72,7 @@ test('line ids stay with their lines as lines are added and removed', async () =
   await expect.poll(async () => (await lines()).map((l) => l.id)).toEqual(['line-1', 'line-2'])
 })
 
-test('issues are underlined in amber on the right line, and listed', async () => {
+test('issues are underlined in amber on the right line, and shown in the status bar', async () => {
   await wb.type('x=v+t')
   await wb.press('Enter')
   await wb.type('y=v')
@@ -85,10 +85,13 @@ test('issues are underlined in amber on the right line, and listed', async () =>
   await expect(unitsMarks(0)).toHaveCount(2)
   await expect(unitsMarks(1)).toHaveCount(0)
 
-  // Listed under the equations for the active line only.
-  await expect(wb.page.locator('[data-role="units-issues"]')).toHaveCount(0)
-  await wb.focusLine(0)
-  await expect(wb.page.locator('[data-role="units-issues"]')).toContainText('different units')
+  // The line is outlined, and the status bar names it; a click there goes to it.
+  await expect(wb.page.locator('[data-line="0"]')).toHaveClass(/has-units-issue/)
+  await expect(wb.page.locator('[data-line="1"]')).not.toHaveClass(/has-units-issue/)
+  await expect(wb.status()).toHaveAttribute('data-kind', 'units')
+  await expect(wb.status()).toContainText("Line 1: 'v' and 't' have different units")
+  await wb.status().click()
+  await expect(wb.line(0)).toBeFocused()
 
   const box = await wb.boxOf(unitsMarks(0).first())
   await wb.page.mouse.move((box.left + box.right) / 2, (box.top + box.bottom) / 2)

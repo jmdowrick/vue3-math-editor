@@ -6,7 +6,13 @@ export { default as EquationWorkbench } from './components/EquationWorkbench.vue
 export { default as UnitsPanel } from './units/UnitsPanel.vue'
 
 export { importContentMathML, type MathMLImport } from './editor/mathmlImport'
-export type { EquationLine, EquationsChangeInfo, UnitsIssue, VariableUnits } from './editor/units'
+export type {
+  EquationLine,
+  EquationsChangeInfo,
+  LineCommitInfo,
+  UnitsIssue,
+  VariableUnits,
+} from './editor/units'
 
 export {
   LIBCELLML_KEY,

@@ -1,10 +1,17 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import Button from 'primevue/button'
+import Dialog from 'primevue/dialog'
 
 import EquationWorkbench from './components/EquationWorkbench.vue'
 import type { MathMLImport } from './editor/mathmlImport'
-import type { EquationLine, EquationsChangeInfo, UnitsIssue, VariableUnits } from './editor/units'
+import type {
+  EquationLine,
+  EquationsChangeInfo,
+  LineCommitInfo,
+  UnitsIssue,
+  VariableUnits,
+} from './editor/units'
 import { type UnitsDefinition, newUnitsFile } from './units/definitions'
 import type { UnitsSource } from './units/library'
 import UnitsPanel from './units/UnitsPanel.vue'
@@ -13,12 +20,22 @@ import exampleUnits from './demo/example-units.cellml?raw'
 
 // Demo switches: ?cellml for CellML mode; ?nolibcellml to run without the
 // libCellML plugin (see main.ts), as an application without it would;
-// ?nooutputs and ?nohistory as an application embedding the editor might.
-const cellml = new URLSearchParams(window.location.search).has('cellml')
-const outputs = !new URLSearchParams(window.location.search).has('nooutputs')
-const history = !new URLSearchParams(window.location.search).has('nohistory')
+// ?nooutputs, ?nohistory, ?validate=commit, ?readonly and ?autofocus as an
+// application embedding the editor might; ?scroll puts the editor in a
+// scrolling box, and ?dialog adds one in a dialog (Open dialog), for the
+// browser tests.
+const query = new URLSearchParams(window.location.search)
+const cellml = query.has('cellml')
+const outputs = !query.has('nooutputs')
+const history = !query.has('nohistory')
+const validate = query.get('validate') === 'commit' ? 'commit' : 'input'
+const readonly = query.has('readonly')
+const autofocus = query.has('autofocus')
+const scroll = query.has('scroll')
+const withDialog = query.has('dialog')
+const dialogOpen = ref(false)
 // Names that are Greek letters' names (alpha, tau_m) drawn as the letters.
-const greekNames = ref(!new URLSearchParams(window.location.search).has('nogreek'))
+const greekNames = ref(!query.has('nogreek'))
 
 const workbench = ref<InstanceType<typeof EquationWorkbench> | null>(null)
 const lines = ref<EquationLine[]>([])
@@ -28,6 +45,12 @@ const changeSources: EquationsChangeInfo['source'][] = []
 function handleEquationsChange(current: EquationLine[], info: EquationsChangeInfo) {
   lines.value = current
   changeSources.push(info.source)
+}
+
+// Each line-commit event, in order (for the browser tests).
+const commits: Array<{ id: string; mathml: string; complete: boolean; reason: string }> = []
+function handleLineCommit(line: EquationLine, info: LineCommitInfo) {
+  commits.push({ id: line.id, mathml: line.mathml, complete: line.complete, reason: info.reason })
 }
 const sources = ref<UnitsSource[]>([])
 const variableUnits = ref<VariableUnits>({})
@@ -102,6 +125,9 @@ Object.assign(window, {
     get sources() {
       return changeSources
     },
+    get commits() {
+      return commits
+    },
     setMathML(xml: string): MathMLImport | undefined {
       return workbench.value?.setMathML(xml)
     },
@@ -118,62 +144,84 @@ Object.assign(window, {
   <main class="app-shell">
     <section class="hero">
       <h1>Math Equation Workbench</h1>
-      <p>Canonical AST editing for LaTeX and Content MathML output.</p>
+      <p>
+        Type as you would write it; the structure is worked out as you go. Canonical AST editing for
+        LaTeX and Content MathML output.
+      </p>
       <label class="demo-option">
         <input v-model="greekNames" type="checkbox" data-role="greek-names" />
         Draw Greek names as Greek letters (alpha_m as α_m)
       </label>
     </section>
 
-    <EquationWorkbench
-      ref="workbench"
-      :cellml="cellml"
-      :outputs="outputs"
-      :history="history"
-      :greek-names="greekNames"
-      :issues="issues"
-      :variable-units="hintUnits"
-      @equations-change="handleEquationsChange"
-    >
-      <template #side>
-        <UnitsPanel
-          v-model:sources="sources"
-          v-model:variable-units="variableUnits"
-          v-model:new-units="newUnits"
-          :status="checker.status.value"
-          :lines="lines"
-          :files="checker.files.value"
-          :problems="checker.problems.value"
-          :units-names="checker.unitsNames.value"
-          :issues="issues"
-          :checking="checker.checking.value"
-        >
-          <template #actions>
-            <Button
-              icon="pi pi-bolt"
-              label="Example"
-              size="small"
-              text
-              data-role="load-example"
-              title="Load example units, and units for dV/dt = -(I_ion - I_stim)/C_m"
-              @click="loadExample"
-            />
-          </template>
-          <template #new-units-actions>
-            <Button
-              v-if="newUnits.length"
-              icon="pi pi-download"
-              label="Download"
-              size="small"
-              text
-              data-role="download-new-units"
-              title="Save the new units as a CellML file of their own (new-units.cellml)"
-              @click="downloadNewUnits"
-            />
-          </template>
-        </UnitsPanel>
-      </template>
-    </EquationWorkbench>
+    <div :class="{ 'scroll-box': scroll }" data-role="scroll-box">
+      <EquationWorkbench
+        ref="workbench"
+        debug
+        :cellml="cellml"
+        :outputs="outputs"
+        :history="history"
+        :validate="validate"
+        :readonly="readonly"
+        :autofocus="autofocus"
+        :greek-names="greekNames"
+        :issues="issues"
+        :variable-units="hintUnits"
+        @equations-change="handleEquationsChange"
+        @line-commit="handleLineCommit"
+      >
+        <template #side>
+          <UnitsPanel
+            v-model:sources="sources"
+            v-model:variable-units="variableUnits"
+            v-model:new-units="newUnits"
+            :status="checker.status.value"
+            :lines="lines"
+            :files="checker.files.value"
+            :problems="checker.problems.value"
+            :units-names="checker.unitsNames.value"
+            :issues="issues"
+            :checking="checker.checking.value"
+          >
+            <template #actions>
+              <Button
+                icon="pi pi-bolt"
+                label="Example"
+                size="small"
+                text
+                data-role="load-example"
+                title="Load example units, and units for dV/dt = -(I_ion - I_stim)/C_m"
+                @click="loadExample"
+              />
+            </template>
+            <template #new-units-actions>
+              <Button
+                v-if="newUnits.length"
+                icon="pi pi-download"
+                label="Download"
+                size="small"
+                text
+                data-role="download-new-units"
+                title="Save the new units as a CellML file of their own (new-units.cellml)"
+                @click="downloadNewUnits"
+              />
+            </template>
+          </UnitsPanel>
+        </template>
+      </EquationWorkbench>
+    </div>
+
+    <template v-if="withDialog">
+      <Button label="Open dialog" data-role="open-dialog" @click="dialogOpen = true" />
+      <Dialog
+        v-model:visible="dialogOpen"
+        modal
+        header="Edit equations"
+        :style="{ width: '48rem' }"
+      >
+        <EquationWorkbench :outputs="false" :history="false" :autofocus="autofocus" />
+      </Dialog>
+    </template>
   </main>
 </template>
 
@@ -184,6 +232,13 @@ Object.assign(window, {
   background:
     radial-gradient(circle at 15% 15%, #f1f5ff 0%, #f8fafc 35%),
     radial-gradient(circle at 85% 0%, #dcfce7 0%, transparent 40%), #f8fafc;
+}
+
+.scroll-box {
+  max-width: 1240px;
+  height: 26rem;
+  margin: 0 auto;
+  overflow: auto;
 }
 
 .hero {

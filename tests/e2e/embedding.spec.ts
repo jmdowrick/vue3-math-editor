@@ -125,12 +125,13 @@ test.describe('setMathML', () => {
     await expect(wb.lines()).toHaveCount(2)
   })
 
-  test('what can’t be read is reported, not shown in the editor', async () => {
+  test('what can’t be read is reported, and shown as its line’s problem', async () => {
     const result = await setMathML(
       '<apply><eq/><ci>a</ci><apply><factorial/><ci>n</ci></apply></apply>',
     )
     expect(result.problems).toEqual(["<factorial> isn't supported; it was left as an empty slot"])
-    await expect(wb.page.locator('[data-role="import-notice"]')).toHaveCount(0)
+    await expect(wb.line(0)).not.toContainText('(')
+    await expect(wb.status()).toContainText("Line 1: <factorial> isn't supported")
   })
 })
 

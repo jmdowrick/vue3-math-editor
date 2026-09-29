@@ -462,6 +462,7 @@ function handlePaste(event: ClipboardEvent) {
       importContentMathML(text) ?? {
         equations: [],
         problems: ["The pasted MathML isn't well-formed XML, so nothing was imported"],
+        lineProblems: [],
       },
     )
     return
@@ -519,9 +520,10 @@ defineExpose({ focus: () => surfaceEl.value?.focus() })
 <style scoped>
 .math-field {
   position: relative;
-  font-size: 1.35rem;
-  min-height: 3.4rem;
-  padding: 0.55rem 0.8rem;
+  /* A host can set it on anything around the editor. */
+  font-size: var(--me-line-font-size, 1.05rem);
+  min-height: 2.6rem;
+  padding: 0.45rem 0.7rem;
   display: flex;
   align-items: center;
   cursor: text;
