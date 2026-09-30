@@ -46,9 +46,14 @@ import {
   numberRuns,
 } from './identifiers'
 import { continuesNumber, followsNumber, inUnits, isUnits } from './numberUnits'
-import { constantForCommand } from './constants'
-import { combinedWithEquals, conditionOperator, conditionOperatorForCommand } from './operators'
-import { getFunctionDefinition } from '../registry/nodes'
+import { CONSTANTS, constantForCommand } from './constants'
+import {
+  CONDITION_OPERATORS,
+  combinedWithEquals,
+  conditionOperator,
+  conditionOperatorForCommand,
+} from './operators'
+import { FUNCTION_REGISTRY, functionLatex, getFunctionDefinition } from '../registry/nodes'
 
 export interface EditorState {
   root: Row
@@ -849,42 +854,69 @@ export const insertDerivative: Command = wrapSelection(
   'expr',
 )
 
+// The structures a "\name" makes, by name (the first is the usual one), and
+// how the command list shows them.
+interface StructureCommand {
+  names: readonly string[]
+  title: string
+  latex: string
+  command: Command
+}
+
+const STRUCTURE_COMMANDS: readonly StructureCommand[] = [
+  {
+    names: ['frac', 'fraction'],
+    title: 'Fraction',
+    latex: '\\frac{a}{b}',
+    command: fractionOfSelection,
+  },
+  { names: ['sqrt'], title: 'Square root', latex: '\\sqrt{x}', command: insertSquareRoot },
+  { names: ['root'], title: 'nth root', latex: '\\sqrt[n]{x}', command: insertNthRoot },
+  { names: ['abs'], title: 'Absolute value', latex: '|x|', command: insertAbs },
+  {
+    names: ['dd', 'diff', 'derivative'],
+    title: 'Derivative',
+    latex: '\\frac{\\mathrm{d}y}{\\mathrm{d}x}',
+    command: insertDerivative,
+  },
+  { names: ['pow', 'power'], title: 'Power', latex: 'x^{n}', command: insertSuperscript },
+  {
+    names: ['cases', 'piecewise'],
+    title: 'Piecewise',
+    latex: '\\left\\{\\begin{smallmatrix}a&p\\\\b&q\\end{smallmatrix}\\right.',
+    command: insertPiecewise,
+  },
+  {
+    names: ['otherwise'],
+    title: "A piecewise's otherwise",
+    latex: '\\text{otherwise}',
+    command: addOtherwise,
+  },
+  {
+    names: ['units'],
+    title: "A number's units",
+    latex: '2\\,\\{\\mathrm{mV}\\}',
+    command: insertUnits,
+  },
+  { names: ['floor', 'lfloor'], title: 'Floor', latex: '\\lfloor x\\rfloor', command: insertFloor },
+  {
+    names: ['ceil', 'ceiling', 'lceil'],
+    title: 'Ceiling',
+    latex: '\\lceil x\\rceil',
+    command: insertCeiling,
+  },
+]
+
+const STRUCTURE_BY_NAME = new Map(
+  STRUCTURE_COMMANDS.flatMap((structure) => structure.names.map((name) => [name, structure])),
+)
+
 // The command for "\name". A Greek letter's name inserts that letter
 // ("\alpha" gives α); any other name is typed out as letters, so "\speed"
 // gives the variable speed.
 export function namedCommand(name: string): Command {
-  switch (name) {
-    case 'frac':
-    case 'fraction':
-      return fractionOfSelection
-    case 'sqrt':
-      return insertSquareRoot
-    case 'root':
-      return insertNthRoot
-    case 'abs':
-      return insertAbs
-    case 'dd':
-    case 'diff':
-    case 'derivative':
-      return insertDerivative
-    case 'pow':
-    case 'power':
-      return insertSuperscript
-    case 'cases':
-    case 'piecewise':
-      return insertPiecewise
-    case 'otherwise':
-      return addOtherwise
-    case 'units':
-      return insertUnits
-    case 'floor':
-    case 'lfloor':
-      return insertFloor
-    case 'ceil':
-    case 'ceiling':
-    case 'lceil':
-      return insertCeiling
-  }
+  const structure = STRUCTURE_BY_NAME.get(name)
+  if (structure) return structure.command
 
   const operator = conditionOperatorForCommand(name)
   if (operator) return insertSymbol(operator.symbol)
@@ -896,4 +928,97 @@ export function namedCommand(name: string): Command {
   if (spelled) return insertFunction(spelled)
 
   return insertAtoms(GREEK_NAMES.has(name) ? [symbol(name)] : row(name))
+}
+
+// ---------------------------------------------------------------------------
+// The command list: what "\…" can be, as it's typed
+// ---------------------------------------------------------------------------
+
+export interface CommandSuggestion {
+  // What to type (and run with namedCommand): the shortest spelling that
+  // starts with what has been typed.
+  name: string
+  title: string
+  latex: string
+}
+
+interface CatalogueEntry {
+  names: readonly string[]
+  title: string
+  latex: string
+}
+
+const OPERATOR_TITLES: Record<string, string> = {
+  Less: 'Less than',
+  Greater: 'Greater than',
+  LessEqual: 'Less than or equal',
+  GreaterEqual: 'Greater than or equal',
+  NotEqual: 'Not equal',
+  And: 'And',
+  Or: 'Or',
+  Xor: 'Exclusive or',
+  Not: 'Not',
+}
+
+const CONSTANT_TITLES: Record<string, string> = {
+  pi: 'Pi',
+  exponentiale: "Euler's number e",
+  infinity: 'Infinity',
+  notanumber: 'Not a number',
+  true: 'True',
+  false: 'False',
+}
+
+// Every command, in the order namedCommand tries them, so a spelling two
+// could claim (pi: the constant, not the Greek letter) is only the first's.
+const CATALOGUE: readonly CatalogueEntry[] = (() => {
+  const entries: CatalogueEntry[] = [
+    ...STRUCTURE_COMMANDS,
+    ...CONDITION_OPERATORS.map((op) => ({
+      names: op.commands,
+      title: OPERATOR_TITLES[op.type],
+      latex: op.latex,
+    })),
+    ...CONSTANTS.map((constant) => ({
+      names: constant.commands,
+      title: CONSTANT_TITLES[constant.symbol] ?? constant.symbol,
+      latex: constant.latex,
+    })),
+    ...Object.values(FUNCTION_REGISTRY).map((definition) => ({
+      names: [definition.name, definition.latexName, ...(definition.aliases ?? [])],
+      title: 'Function',
+      latex: functionLatex(definition.name),
+    })),
+    ...[...GREEK_NAMES].map((name) => ({
+      names: [name],
+      title: 'Greek letter',
+      latex: `\\${name}`,
+    })),
+  ]
+  const claimed = new Set<string>()
+  return entries.flatMap((entry) => {
+    const names = [...new Set(entry.names)].filter((name) => !claimed.has(name))
+    for (const name of names) claimed.add(name)
+    return names.length ? [{ ...entry, names }] : []
+  })
+})()
+
+// The commands "\prefix" may be the start of: the one it is exactly first,
+// then the rest in catalogue order (structures, operators, constants,
+// functions, Greek letters).
+export function commandSuggestions(prefix: string, limit = 8): CommandSuggestion[] {
+  const matches = CATALOGUE.flatMap((entry, order) => {
+    const spellings = entry.names.filter((name) => name.startsWith(prefix))
+    if (!spellings.length) return []
+    const name = spellings.reduce((shortest, spelling) =>
+      spelling.length < shortest.length ? spelling : shortest,
+    )
+    return [
+      { name, title: entry.title, latex: entry.latex, exact: spellings.includes(prefix), order },
+    ]
+  })
+  return matches
+    .sort((a, b) => Number(b.exact) - Number(a.exact) || a.order - b.order)
+    .slice(0, limit)
+    .map(({ name, title, latex }) => ({ name, title, latex }))
 }

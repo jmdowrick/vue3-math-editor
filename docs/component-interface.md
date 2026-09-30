@@ -39,9 +39,16 @@ Nothing here needs libCellML.
 `side` is shown beside the equation editor, on the right, and stays in view as the page
 scrolls: the place for a units panel (see below). With it, the outputs (Content MathML,
 MathJSON, LaTeX and the AST, in tabs, Content MathML first) go under the editor; without
-it, they go beside it. On a narrow screen everything stacks: editor, side, outputs. Keys
-typed in the side content are left alone by the workbench, so `\` and Ctrl+Z work there
-as in any input.
+it, they go beside it. When the workbench is narrow (under 900px: its own width, not the
+window's, so a narrow panel on a wide screen counts) everything stacks: editor, side,
+outputs. The side content stays 1rem below the top of the scrolling area, or below
+`--me-toolbar-top`; set `--me-side-top` to put it elsewhere. Keys typed in the side
+content are left alone by the workbench, so `\` and Ctrl+Z work there as in any input.
+
+The workbench takes the width it is given; it doesn't set a maximum width or centre
+itself. Its layout is worked out from its own width (it is a CSS size container), so
+it needs a definite width from its host: in a flex row, give it `flex: 1` (or a width)
+rather than leaving it to size to its content.
 
 ### Methods
 
@@ -73,8 +80,9 @@ function open(mathml: string) {
 ### Events
 
 `equations-change` is emitted with every line whenever the content of any line changes
-(not when only the cursor moves), and once when the workbench is created. Its second
-argument says what changed the lines:
+(not when only the cursor moves), when the lines are reordered (Alt+↑/↓, or dragging a
+line by its number: each line keeps its id, and a reorder alone doesn't commit a line),
+and once when the workbench is created. Its second argument says what changed the lines:
 
 ```ts
 interface EquationsChangeInfo {
@@ -115,7 +123,7 @@ interface LineCommitInfo {
   reason:
     | 'enter'    // Enter, which also adds a line
     | 'new-line' // the "+ Line" button
-    | 'navigate' // ↑/↓ or a click to another line
+    | 'navigate' // ↑/↓, a click to another line, or moving another line
     | 'blur'     // focus left the lines (not for the toolbar or its galleries)
     | 'paste'    // a paste of several equations replaced every line: one each
 }
@@ -128,13 +136,14 @@ A host that validates or stores lines can do it on `line-commit` rather than on 
 ### Problems and the status bar
 
 A line's problems are underlined where they are (red, or amber for units issues from
-`issues`; point at one to read it), and the line is outlined. Under the lines, a status
-bar one line high shows the active line's first problem, or else the first on any line,
-as "Line 2: Missing right-hand side", with "+3 more" if there are others; pointing at it
-lists them all, and clicking it goes to that line. It also shows the `\` command being
-typed, and what a paste did ("Imported 3 equations…"). It is always there, so the lines
-don't move when a problem appears or goes. When problems show at all is the `validate`
-prop's choice.
+`issues`; point at one to read it), and the line is outlined, with an icon beside its
+number (a circle for an error, a triangle for units only). Under the lines, a status bar
+one line high shows the active line's first problem, or else the first on any line, as
+"Line 2: Missing right-hand side", with "+3 more" if there are others; pointing at it
+lists them all, and clicking it goes to that line. It also shows what a paste did
+("Imported 3 equations…"). It is there only while it has something to say; being under
+the lines, they don't move when it appears or goes. When problems show at all is the
+`validate` prop's choice.
 
 ### Issues
 
@@ -427,6 +436,11 @@ hyperbolic and their inverses, exp, ln, log), Derivative, Piecewise and Symbols 
 click never takes the focus from the line. The groups are defined in
 `src/editor/toolbar.ts`.
 
+The toolbar stays one row however narrow the workbench is: the groups that don't fit,
+from the end, go into a **More ▾** gallery (a group that is one button is an item
+there, and a group with a gallery brings its sections). The line and copy buttons
+always show.
+
 The toolbar is sticky: it stays at the top of whatever scrolls the lines (the page, or a
 dialog's content) while the user scrolls through them. Set `--me-toolbar-top` to keep it
 below a sticky header of the host's. While stuck, it spans the panel and draws the panel's
@@ -457,9 +471,18 @@ Either way, the host restores a state by calling `setMathML` with its saved Math
 Colours come from the PrimeVue theme's design tokens (`--p-content-background`,
 `--p-text-color`, `--p-content-border-color`, `--p-text-muted-color`, …), so the
 workbench follows the host's light or dark mode. Without PrimeVue's tokens it falls back
-to a light theme. The accent (the active line's border, the toolbar buttons' hover) is
-the editor's own blue; set `--math-editor-accent` on an element around it to change it. The output
-panels are dark in both modes.
+to a light theme. The output panels, the command chip and tooltips are dark in both
+modes. The editor's own colours can be set on an element around it:
+
+| Variable | Default | Colours |
+|---|---|---|
+| `--math-editor-accent` | `#2563eb` | the active line's border, the caret, the selection, the active slot, focus, toolbar hover, the command list's choice |
+| `--math-editor-danger` | `#dc2626` | problems: underlines, outlines, icons and the status bar |
+| `--math-editor-warn` | `#d97706` | units issues, likewise |
+| `--math-editor-units` | `#60a5fa` | number units while typed, and the mark on a number with units |
+
+Layout variables: `--me-toolbar-top` and `--me-line-font-size` (above), and
+`--me-side-top` (the side content's sticky top; see [Slot](#slot)).
 
 ### MathML text
 

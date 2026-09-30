@@ -116,6 +116,50 @@ test.describe('commands', () => {
     await wb.expectMathJson(['Add', 'alpha', 1])
   })
 
+  test('the command list: what it may be, completed with Tab', async () => {
+    const list = wb.page.locator('[data-role="command-list"]')
+    await wb.type('\\fr')
+    await expect(list.locator('[role="option"]')).toHaveCount(1)
+    await expect(list.locator('[aria-selected="true"]')).toHaveAttribute('data-command', 'frac')
+    await wb.press('Tab')
+    await expect(list).toHaveCount(0)
+    await wb.type('1')
+    await wb.press('ArrowDown')
+    await wb.type('2')
+    await wb.expectMathJson(['Divide', 1, 2])
+  })
+
+  test('↓ then Enter picks the next in the list', async () => {
+    await wb.type('\\s')
+    const options = wb.page.locator('[data-role="command-list"] [role="option"]')
+    await expect(options.first()).toHaveAttribute('data-command', 'sqrt')
+    await wb.press('ArrowDown')
+    await expect(options.nth(1)).toHaveAttribute('aria-selected', 'true')
+    await wb.press('Enter')
+    await wb.type('x')
+    await wb.expectMathJson(['Sin', 'x'])
+  })
+
+  test('a click in the list inserts it', async () => {
+    await wb.type('\\ab')
+    await wb.page.locator('[data-role="command-list"] [data-command="abs"]').click()
+    await wb.type('x')
+    await wb.expectMathJson(['Abs', 'x'])
+    await expect(wb.line(0)).toBeFocused()
+  })
+
+  test('Space takes what was typed, and \\ with nothing typed chooses nothing', async () => {
+    await wb.type('\\xyz')
+    await expect(wb.page.locator('[data-role="command-list"] [role="option"]')).toHaveCount(0)
+    await wb.press('Space')
+    await wb.expectMathJson('xyz')
+    await wb.press('Backspace', 3)
+    await wb.type('\\')
+    await wb.press('Enter')
+    await expect(wb.page.locator('[data-role="command-list"]')).toHaveCount(0)
+    await expect.poll(() => wb.mathJson()).toBeNull()
+  })
+
   test('Escape cancels a command', async () => {
     await wb.type('\\fr')
     await wb.press('Escape')
@@ -191,7 +235,7 @@ test('stray input is reported, not lost', async () => {
   await wb.type('1,2')
   await expect(wb.status()).toContainText('Unexpected ","')
   await wb.press('Backspace', 2)
-  await expect(wb.status()).toBeEmpty()
+  await expect(wb.status()).toHaveCount(0)
 })
 
 test.describe('scientific numbers', () => {

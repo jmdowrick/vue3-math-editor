@@ -85,7 +85,7 @@ test.describe('setMathML', () => {
       ['a', 'b'],
       ['c', 'd'],
     ])
-    await expect(wb.page.getByTitle('Undo (Ctrl+Z)')).toBeDisabled()
+    await expect(wb.page.locator('[data-role="undo"]')).toBeDisabled()
   })
 
   test('an empty string leaves one empty line', async () => {
@@ -148,8 +148,8 @@ test('outputs off: no output panels and no "Copy as"', async ({ page }) => {
 test('history off: no undo buttons, and Ctrl+Z is left to the host', async ({ page }) => {
   wb = new Workbench(page)
   await wb.goto('/?nohistory')
-  await expect(page.getByTitle('Undo (Ctrl+Z)')).toHaveCount(0)
-  await expect(page.getByTitle('Redo (Ctrl+Shift+Z)')).toHaveCount(0)
+  await expect(page.locator('[data-role="undo"]')).toHaveCount(0)
+  await expect(page.locator('[data-role="redo"]')).toHaveCount(0)
 
   await page.evaluate(() => {
     const seen: boolean[] = []

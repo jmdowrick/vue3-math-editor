@@ -72,7 +72,7 @@ else drives where an edit lands.
 | `renderers/mathjson.ts`, `renderers/mathml.ts` | `AstNode` → MathJSON, Content MathML |
 | `components/MathField.vue` | One editable equation: rendering, overlays, keyboard, mouse, clipboard events |
 | `editor/toolbar.ts` | The toolbar's groups and galleries: each button's LaTeX, title and command |
-| `components/EquationWorkbench.vue` | Lines, undo history, committing lines, problems and the status bar, `\` command mode, toolbar, output tabs, `side` slot |
+| `components/EquationWorkbench.vue` | Lines, undo history, committing lines, problems and the status bar, reordering lines, `\` command mode and its command list, toolbar (and its More overflow), output tabs, `side` slot |
 | `units/libcellml.ts` | The parts of libcellml.js the checker uses, typed structurally; releasing its objects |
 | `units/library.ts` | The units library: the user's CellML units files, keeping only their `<units>` |
 | `units/check.ts` | Checking a line's units with libCellML: prechecks, the check model, the analyser |

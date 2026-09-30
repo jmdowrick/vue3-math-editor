@@ -464,6 +464,7 @@ Checking starts once a units file is loaded or a variable has units. In the demo
 | Backspace | Delete the thing before the caret. Next to a fraction or other structure, the first press steps inside it rather than deleting everything; an empty structure goes in one press. At the start of a structure's first slot, it removes the structure but keeps its contents; in a later slot, it moves back to the end of the previous one. |
 | Delete | The same, forwards |
 | Enter | Start a new equation line |
+| Alt+↑ / Alt+↓ (Option on a Mac) | Move the equation line up / down. You can also drag a line by its number. |
 | Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z (or Ctrl/Cmd+Y) | Undo, redo |
 
 Names are edited one character at a time: you can click or arrow into the middle of
@@ -527,7 +528,11 @@ With a selection:
 
 ## `\` commands
 
-Type `\`, the command's name, then Space, Enter, Tab or `(`. Esc cancels.
+Type `\` and a list of commands opens at the caret. It shows what you might be typing,
+narrowing as you type (`\s` lists `\sqrt`, `\sin`, `\sec`, …, and a command you've typed
+in full comes first). ↑ and ↓ choose from the list, and Tab or Enter inserts the one
+chosen (with nothing typed yet, nothing is chosen until you press ↓). Space or `(`
+takes exactly what you typed, and Esc cancels. You can also click a command in the list.
 
 | Command | Inserts |
 |---|---|

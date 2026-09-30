@@ -161,7 +161,7 @@ Object.assign(window, {
       </label>
     </section>
 
-    <div :class="{ 'scroll-box': scroll }" data-role="scroll-box">
+    <div class="workbench-box" :class="{ 'scroll-box': scroll }" data-role="scroll-box">
       <EquationWorkbench
         ref="workbench"
         debug
@@ -242,10 +242,13 @@ Object.assign(window, {
     radial-gradient(circle at 85% 0%, #dcfce7 0%, transparent 40%), #f8fafc;
 }
 
-.scroll-box {
+.workbench-box {
   max-width: 1240px;
-  height: 26rem;
   margin: 0 auto;
+}
+
+.scroll-box {
+  height: 26rem;
   overflow: auto;
 }
 

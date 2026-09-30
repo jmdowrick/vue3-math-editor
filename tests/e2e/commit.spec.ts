@@ -93,7 +93,7 @@ test.describe('problems while typing (validate="input")', () => {
   test('what is only missing is marked once the line is left', async () => {
     await wb.type('x+')
     await expect(wb.marks(0)).toHaveCount(0)
-    await expect(wb.status()).toBeEmpty()
+    await expect(wb.status()).toHaveCount(0)
 
     await wb.press('Enter')
     await expect(wb.marks(0)).toHaveCount(1)
@@ -113,7 +113,7 @@ test.describe('problems while typing (validate="input")', () => {
     await expect(wb.status()).toContainText('Unexpected ","')
     const during = await boxes()
     await wb.press('Backspace')
-    await expect(wb.status()).toBeEmpty()
+    await expect(wb.status()).toHaveCount(0)
     const after = await boxes()
 
     for (const [index, box] of before.entries()) {
@@ -135,7 +135,7 @@ test.describe('validate="commit"', () => {
   test('a line’s problems show once it is committed', async () => {
     await wb.type('1,2=')
     await expect(wb.marks(0)).toHaveCount(0)
-    await expect(wb.status()).toBeEmpty()
+    await expect(wb.status()).toHaveCount(0)
 
     await wb.press('Enter')
     await expect(wb.marks(0)).toHaveCount(2)
@@ -180,13 +180,15 @@ test('the toolbar is one row at 800px', async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 900 })
   wb = new Workbench(page)
   await wb.goto()
+  // Everything fits: nothing is in "More ▾".
+  await expect(page.locator('[data-role="toolbar-more"]')).toHaveClass(/overflowed/)
   const tops = await page
-    .locator('.toolbar .tool-button, .toolbar .p-button')
+    .locator('.toolbar .tool-button:not(.overflowed), .toolbar .p-button')
     .evaluateAll((buttons) => buttons.map((b) => Math.round(b.getBoundingClientRect().top)))
   expect(new Set(tops).size).toBe(1)
 
   // Every button's label fits inside it.
-  const overflows = await page.locator('.toolbar .tool-button').evaluateAll((buttons) =>
+  const overflows = await page.locator('.toolbar [data-tool]').evaluateAll((buttons) =>
     buttons
       .filter((button) => {
         const outer = button.getBoundingClientRect()

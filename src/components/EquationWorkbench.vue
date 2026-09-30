@@ -50,6 +50,7 @@ import { contentStable } from './contentStable'
 import {
   type Command,
   type EditorState,
+  commandSuggestions,
   emptyState,
   insertAtoms,
   namedCommand,
@@ -73,7 +74,7 @@ import { settleNames } from '../editor/names'
 import { settleState } from '../editor/numberUnits'
 import { parseRow } from '../editor/parse'
 import { describeSelection, selectedAtoms, selectionOf } from '../editor/selection'
-import { TOOLBAR, type ToolGroup } from '../editor/toolbar'
+import { TOOLBAR, type ToolGroup, type ToolSection } from '../editor/toolbar'
 import { isProblem, markKind } from '../editor/marks'
 import { renderMathJson } from '../renderers/mathjson'
 
@@ -239,6 +240,14 @@ const redo = () => restore(undoHistory.redo(takeSnapshot()))
 const canUndo = computed(() => historyVersion.value >= 0 && undoHistory.canUndo)
 const canRedo = computed(() => historyVersion.value >= 0 && undoHistory.canRedo)
 
+// The shortcut modifier, as the platform names it (Ctrl and Cmd both work).
+const isMac = /mac/i.test(
+  (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ??
+    navigator.platform,
+)
+const modKey = isMac ? '⌘' : 'Ctrl'
+const altKey = isMac ? '⌥' : 'Alt'
+
 // ---------------------------------------------------------------------------
 // Editing
 // ---------------------------------------------------------------------------
@@ -353,6 +362,8 @@ function updateStuck() {
   const offset =
     toolbarEl.value.getBoundingClientRect().top - panelEl.value.getBoundingClientRect().top
   toolbarStuck.value = offset > 0.5
+  // The command list follows the caret.
+  if (commandBuffer.value !== null) placeCommandList()
 }
 function scheduleStuck() {
   if (!stuckFrame) stuckFrame = requestAnimationFrame(updateStuck)
@@ -363,12 +374,22 @@ onMounted(() => {
   document.addEventListener('scroll', scheduleStuck, { capture: true, passive: true })
   window.addEventListener('resize', scheduleStuck, { passive: true })
   updateStuck()
+
+  // Refitted when the room changes, and when a button's size does (KaTeX's
+  // fonts loading, the host's font size).
+  if (typeof ResizeObserver !== 'undefined' && toolsEl.value) {
+    toolsObserver = new ResizeObserver(fitTools)
+    toolsObserver.observe(toolsEl.value)
+    for (const button of toolsEl.value.children) toolsObserver.observe(button)
+  }
+  fitTools()
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('scroll', scheduleStuck, { capture: true })
   window.removeEventListener('resize', scheduleStuck)
   if (stuckFrame) cancelAnimationFrame(stuckFrame)
+  toolsObserver?.disconnect()
 })
 
 // Run a command on the active line (toolbar buttons, command mode).
@@ -418,6 +439,7 @@ function moveToLine(index: number) {
 // on another line lands here.
 function handleLineFocus(index: number) {
   if (index === activeIndex.value) return
+  commandBuffer.value = null
   commitLine(activeIndex.value, 'navigate')
   activeIndex.value = index
 }
@@ -427,6 +449,8 @@ const stackEl = ref<HTMLElement | null>(null)
 function handleFocusOut(event: FocusEvent) {
   const to = event.relatedTarget as Element | null
   if (to && (stackEl.value?.contains(to) || to.closest('[data-me-popover]'))) return
+  // A command half typed is dropped, not left waiting.
+  commandBuffer.value = null
   commitLine(activeIndex.value, 'blur')
 }
 
@@ -454,13 +478,137 @@ function removeActiveLine() {
 }
 
 // ---------------------------------------------------------------------------
+// Reordering lines: Alt+↑/↓, or dragging a line by its number
+// ---------------------------------------------------------------------------
+
+const canReorder = computed(() => !props.readonly && equations.value.length > 1)
+
+// Line `from` moved to `to`, as one undo step, and made the active line. Its
+// id goes with it, and its content doesn't change, so it isn't committed; the
+// line that was active is, if it's another, as moving to another line would.
+function moveLine(from: number, to: number) {
+  const count = equations.value.length
+  if (!canReorder.value || from === to || Math.min(from, to) < 0 || Math.max(from, to) >= count) {
+    return
+  }
+
+  if (from !== activeIndex.value) {
+    commitLine(activeIndex.value, 'navigate')
+    const left = activeIndex.value
+    equations.value = withLine(left, settle(equations.value[left], true))
+  }
+  pushHistory()
+  const order = equations.value.map((_, index) => index)
+  order.splice(to, 0, ...order.splice(from, 1))
+  equations.value = order.map((index) => equations.value[index])
+  lineIds.value = order.map((index) => lineIds.value[index])
+  activeIndex.value = to
+  focusActive()
+}
+
+// The line being dragged, and where it would land: before or after a line.
+const dragFrom = ref<number | null>(null)
+const dropTarget = ref<{ index: number; after: boolean } | null>(null)
+
+// Where the dragged line lands, once it's out of the list, if it moves.
+function landing(): number | null {
+  if (dragFrom.value === null || !dropTarget.value) return null
+  const { index, after } = dropTarget.value
+  const to = index + (after ? 1 : 0)
+  const at = to > dragFrom.value ? to - 1 : to
+  return at === dragFrom.value ? null : at
+}
+
+function handleDragStart(index: number, event: DragEvent) {
+  if (!canReorder.value || !event.dataTransfer) return
+  dragFrom.value = index
+  event.dataTransfer.effectAllowed = 'move'
+  // Something must be set for Firefox to drag at all.
+  event.dataTransfer.setData('text/plain', `Line ${index + 1}`)
+  // The whole line is what's dragged, held where it was picked up.
+  const row = (event.currentTarget as HTMLElement).closest('.equation-row')
+  if (row) {
+    const box = row.getBoundingClientRect()
+    event.dataTransfer.setDragImage(row, event.clientX - box.left, event.clientY - box.top)
+  }
+}
+
+function handleDragOver(index: number, event: DragEvent) {
+  // Only a line being dragged; anything else dropped is the field's.
+  if (dragFrom.value === null) return
+  event.preventDefault()
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+  const box = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  dropTarget.value = { index, after: event.clientY > box.top + box.height / 2 }
+}
+
+function handleDrop(event: DragEvent) {
+  if (dragFrom.value === null) return
+  event.preventDefault()
+  const from = dragFrom.value
+  const to = landing()
+  clearDrag()
+  if (to !== null) moveLine(from, to)
+}
+
+function clearDrag() {
+  dragFrom.value = null
+  dropTarget.value = null
+}
+
+// The line drawn where the dragged line would land (none where it wouldn't
+// move).
+function dropClass(index: number) {
+  if (landing() === null || dropTarget.value?.index !== index) return null
+  return dropTarget.value.after ? 'drop-after' : 'drop-before'
+}
+
+// ---------------------------------------------------------------------------
 // Keyboard: command mode and shortcuts (capture phase, before MathField)
 // ---------------------------------------------------------------------------
 
+// What is typed, as it's typed.
 function commitCommand() {
   const name = (commandBuffer.value ?? '').trim()
   commandBuffer.value = null
   if (name) run(namedCommand(name))
+}
+
+// The command list, while a command is typed: what it may be, the one it is
+// exactly first. One is chosen (highlighted) once anything is typed, so Tab
+// or Enter completes it; with nothing typed, only once ↓ picks one.
+const suggestions = computed(() =>
+  commandBuffer.value === null ? [] : commandSuggestions(commandBuffer.value),
+)
+const highlighted = ref(-1)
+watch(commandBuffer, (typed) => {
+  highlighted.value = typed && suggestions.value.length ? 0 : -1
+  if (typed !== null) void nextTick(placeCommandList)
+})
+
+function chooseCommand(index: number) {
+  const choice = suggestions.value[index]
+  if (!choice) return commitCommand()
+  commandBuffer.value = null
+  run(namedCommand(choice.name))
+}
+
+function moveHighlight(step: number) {
+  const count = suggestions.value.length
+  if (count) highlighted.value = (highlighted.value + step + count) % count
+}
+
+// Under the caret, or over it near the bottom of the window. Teleported to
+// the body, so nothing around the workbench clips it or moves it.
+const commandListStyle = ref<Record<string, string>>({})
+function placeCommandList() {
+  const caret = fieldRefs.value[activeIndex.value]?.caretRect()
+  if (!caret) return
+  const left = Math.max(8, Math.min(caret.left - 8, window.innerWidth - 336))
+  commandListStyle.value =
+    caret.bottom < window.innerHeight * 0.6
+      ? { left: `${left}px`, top: `${caret.bottom + 6}px` }
+      : { left: `${left}px`, bottom: `${window.innerHeight - caret.top + 6}px` }
 }
 
 function handleCommandModeKey(event: KeyboardEvent) {
@@ -468,7 +616,11 @@ function handleCommandModeKey(event: KeyboardEvent) {
     commandBuffer.value += event.key
   } else if (event.key === 'Backspace') {
     commandBuffer.value = commandBuffer.value ? commandBuffer.value.slice(0, -1) : null
-  } else if (['Enter', ' ', 'Tab', '('].includes(event.key)) {
+  } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    moveHighlight(event.key === 'ArrowDown' ? 1 : -1)
+  } else if (event.key === 'Enter' || event.key === 'Tab') {
+    chooseCommand(highlighted.value)
+  } else if (event.key === ' ' || event.key === '(') {
     commitCommand()
   } else if (event.key === 'Escape') {
     commandBuffer.value = null
@@ -516,6 +668,13 @@ function handleCaptureKeydown(event: KeyboardEvent) {
 
 function handleUnusedKey(event: KeyboardEvent) {
   if (event.defaultPrevented) return
+
+  // Alt+↑/↓: move the line up or down.
+  if (event.altKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+    event.preventDefault()
+    moveLine(activeIndex.value, activeIndex.value + (event.key === 'ArrowUp' ? -1 : 1))
+    return
+  }
 
   switch (event.key) {
     case 'Enter':
@@ -567,6 +726,57 @@ function runFromGallery(command: Command) {
 function buttonHtml(latex: string): string {
   return katex.renderToString(latex, { throwOnError: false, strict: 'ignore' })
 }
+
+// The tool groups that fit in the toolbar, in order; the rest are in "More ▾"
+// (a gallery like the others: a group that is one button is an item there,
+// and a group with a gallery its sections). The tools take the room the line
+// and copy buttons leave, and every button is measured, shown or not, so what
+// fits doesn't depend on what is shown.
+const toolsEl = ref<HTMLElement | null>(null)
+const moreEl = ref<HTMLElement | null>(null)
+const visibleTools = ref(TOOLBAR.length)
+let toolsObserver: ResizeObserver | null = null
+
+function fitTools() {
+  const group = toolsEl.value
+  const more = moreEl.value
+  if (!group || !more) return
+  const width = (el: Element) => el.getBoundingClientRect().width
+  const room = width(group) + 0.5
+  const gap = parseFloat(getComputedStyle(group).columnGap) || 0
+  const widths = [...group.querySelectorAll('[data-tool]')].map(width)
+  const fits = (count: number, withMore: boolean) => {
+    const items = [...widths.slice(0, count), ...(withMore ? [width(more)] : [])]
+    return items.reduce((sum, w) => sum + w, 0) + gap * Math.max(0, items.length - 1) <= room
+  }
+
+  let count = widths.length
+  if (!fits(count, false)) {
+    count--
+    while (count > 0 && !fits(count, true)) count--
+  }
+  visibleTools.value = count
+}
+
+const moreGroup = computed((): ToolGroup | null => {
+  const hidden = TOOLBAR.slice(visibleTools.value)
+  if (!hidden.length) return null
+  const sections: ToolSection[] = []
+  for (const group of hidden) {
+    if (group.command) {
+      // One-button groups next to each other share a section.
+      const item = { latex: group.latex, title: group.title, command: group.command }
+      const last = sections.at(-1)
+      if (last && !last.label) last.items.push(item)
+      else sections.push({ items: [item] })
+    } else {
+      for (const section of group.sections ?? []) {
+        sections.push({ label: section.label ?? group.title, items: section.items })
+      }
+    }
+  }
+  return { id: 'more', title: 'More tools', latex: '', sections }
+})
 
 // ---------------------------------------------------------------------------
 // Output panels
@@ -693,10 +903,9 @@ const rowProblemClass = (index: number) => {
   return problems.some((problem) => problem.kind === 'error') ? 'has-error' : 'has-units-issue'
 }
 
-// The status bar: the command being typed; else the active line's first
-// problem, or the first anywhere, and how many more; else the import notice.
+// The status bar: the active line's first problem, or the first anywhere, and
+// how many more; else the import notice; else nothing, and no bar.
 const status = computed(() => {
-  if (commandBuffer.value !== null) return { kind: 'command' as const, text: commandBuffer.value }
   const all = lineProblems.value.flat()
   const first = lineProblems.value[activeIndex.value][0] ?? all[0]
   if (first) {
@@ -718,6 +927,10 @@ const statusTitle = computed(() =>
     .map((problem) => `Line ${problem.line + 1}: ${problem.message}`)
     .join('\n'),
 )
+
+// A line's shown problems, one a line, for the icon beside its number.
+const lineProblemsText = (index: number) =>
+  lineProblems.value[index].map((problem) => problem.message).join('\n')
 
 function goToStatusLine() {
   const line = status.value?.line
@@ -868,289 +1081,404 @@ function toggleCopyMenu(event: Event) {
 </script>
 
 <template>
-  <section
-    class="editor-grid"
-    :class="{ 'has-side': !!$slots.side, 'no-outputs': !outputs, readonly }"
-    @keydown.capture="handleCaptureKeydown"
-  >
-    <div ref="panelEl" class="editor-panel">
-      <!-- Sticky: it stays in view while the lines scroll under it. -->
-      <div
-        ref="toolbarEl"
-        class="toolbar"
-        :class="{ stuck: toolbarStuck }"
-        role="toolbar"
-        aria-label="Equation tools"
-      >
-        <div class="toolbar-group">
-          <button
-            v-for="group in TOOLBAR"
-            :key="group.id"
-            type="button"
-            class="tool-button"
-            :class="{ 'has-gallery': !!group.sections }"
-            :title="group.title"
-            :data-role="`toolbar-${group.id}`"
-            :aria-haspopup="group.sections ? 'true' : undefined"
-            :disabled="readonly"
-            @mousedown.prevent
-            @click="openGroup(group, $event)"
-          >
-            <span v-html="buttonHtml(group.latex)"></span>
-            <i v-if="group.sections" class="pi pi-chevron-down tool-chevron" aria-hidden="true"></i>
-          </button>
-        </div>
+  <!-- The container its layout follows: it fits the room the host gives it,
+       whatever the window's size. -->
+  <div class="me-workbench">
+    <section
+      class="editor-grid"
+      :class="{ 'has-side': !!$slots.side, 'no-outputs': !outputs, readonly }"
+      @keydown.capture="handleCaptureKeydown"
+    >
+      <div ref="panelEl" class="editor-panel">
+        <!-- Sticky: it stays in view while the lines scroll under it. -->
+        <div
+          ref="toolbarEl"
+          class="toolbar"
+          :class="{ stuck: toolbarStuck }"
+          role="toolbar"
+          aria-label="Equation tools"
+        >
+          <div ref="toolsEl" class="toolbar-group toolbar-tools">
+            <button
+              v-for="(group, index) in TOOLBAR"
+              :key="group.id"
+              type="button"
+              class="tool-button"
+              :class="{ 'has-gallery': !!group.sections, overflowed: index >= visibleTools }"
+              :title="group.title"
+              :data-role="`toolbar-${group.id}`"
+              data-tool
+              :aria-haspopup="group.sections ? 'true' : undefined"
+              :disabled="readonly"
+              @mousedown.prevent
+              @click="openGroup(group, $event)"
+            >
+              <span v-html="buttonHtml(group.latex)"></span>
+              <i
+                v-if="group.sections"
+                class="pi pi-chevron-down tool-chevron"
+                aria-hidden="true"
+              ></i>
+            </button>
+            <!-- The groups that don't fit. Always there, to be measured. -->
+            <button
+              ref="moreEl"
+              type="button"
+              class="tool-button has-gallery"
+              :class="{ overflowed: !moreGroup }"
+              title="More tools"
+              aria-label="More tools"
+              aria-haspopup="true"
+              data-role="toolbar-more"
+              :disabled="readonly"
+              @mousedown.prevent
+              @click="moreGroup && openGroup(moreGroup, $event)"
+            >
+              <i class="pi pi-ellipsis-h" aria-hidden="true"></i>
+              <i class="pi pi-chevron-down tool-chevron" aria-hidden="true"></i>
+            </button>
+          </div>
 
-        <div class="toolbar-group toolbar-lines">
-          <Button
-            icon="pi pi-plus"
-            size="small"
-            text
-            title="Add equation line (Enter)"
-            aria-label="Add equation line"
-            data-role="add-line"
-            :disabled="readonly"
-            @mousedown.prevent
-            @click="addLineAfterActive('new-line')"
-          />
-          <Button
-            icon="pi pi-trash"
-            size="small"
-            text
-            severity="danger"
-            title="Remove equation line"
-            aria-label="Remove equation line"
-            :disabled="readonly || equations.length <= 1"
-            @mousedown.prevent
-            @click="removeActiveLine"
-          />
-          <Button
-            v-if="props.history"
-            icon="pi pi-undo"
-            size="small"
-            text
-            title="Undo (Ctrl+Z)"
-            :disabled="readonly || !canUndo"
-            @mousedown.prevent
-            @click="undo"
-          />
-          <Button
-            v-if="props.history"
-            icon="pi pi-refresh"
-            size="small"
-            text
-            title="Redo (Ctrl+Shift+Z)"
-            :disabled="readonly || !canRedo"
-            @mousedown.prevent
-            @click="redo"
-          />
-        </div>
+          <div class="toolbar-group toolbar-lines">
+            <Button
+              icon="pi pi-plus"
+              size="small"
+              text
+              title="Add equation line (Enter)"
+              aria-label="Add equation line"
+              data-role="add-line"
+              :disabled="readonly"
+              @mousedown.prevent
+              @click="addLineAfterActive('new-line')"
+            />
+            <Button
+              icon="pi pi-trash"
+              size="small"
+              text
+              severity="danger"
+              title="Remove equation line"
+              aria-label="Remove equation line"
+              :disabled="readonly || equations.length <= 1"
+              @mousedown.prevent
+              @click="removeActiveLine"
+            />
+            <Button
+              v-if="props.history"
+              icon="pi pi-undo"
+              size="small"
+              text
+              :title="`Undo (${modKey}+Z)`"
+              aria-label="Undo"
+              data-role="undo"
+              :disabled="readonly || !canUndo"
+              @mousedown.prevent
+              @click="undo"
+            />
+            <!-- PrimeIcons has no redo: undo, mirrored. -->
+            <Button
+              v-if="props.history"
+              icon="pi pi-undo"
+              class="redo-button"
+              size="small"
+              text
+              :title="`Redo (${modKey}+Shift+Z)`"
+              aria-label="Redo"
+              data-role="redo"
+              :disabled="readonly || !canRedo"
+              @mousedown.prevent
+              @click="redo"
+            />
+          </div>
 
-        <div v-if="outputs" class="toolbar-group">
-          <Button
-            icon="pi pi-copy"
-            :label="copyAsLabel"
-            size="small"
-            text
-            title="Copy the selection, or the whole equation, as LaTeX, MathJSON or Content MathML"
-            aria-haspopup="true"
-            aria-controls="copy-as-menu"
-            data-role="copy-as"
-            :disabled="!canCopyAs"
-            @mousedown.prevent
-            @click="toggleCopyMenu"
-          />
-          <Menu id="copy-as-menu" ref="copyMenu" :model="copyAsItems" :popup="true" />
-        </div>
-      </div>
-
-      <Popover ref="gallery" data-me-popover data-role="gallery" class="me-gallery">
-        <div v-if="galleryGroup" class="gallery">
-          <div
-            v-for="(section, sectionIndex) in galleryGroup.sections"
-            :key="sectionIndex"
-            class="gallery-section"
-          >
-            <div v-if="section.label" class="gallery-label">{{ section.label }}</div>
-            <div class="gallery-items">
-              <button
-                v-for="item in section.items"
-                :key="item.title"
-                type="button"
-                class="tool-button"
-                :title="item.title"
-                @mousedown.prevent
-                @click="runFromGallery(item.command)"
-              >
-                <span v-html="buttonHtml(item.latex)"></span>
-              </button>
-            </div>
+          <div v-if="outputs" class="toolbar-group toolbar-copy">
+            <Button
+              icon="pi pi-copy"
+              :label="copyAsLabel"
+              size="small"
+              text
+              title="Copy the selection, or the whole equation, as LaTeX, MathJSON or Content MathML"
+              aria-haspopup="true"
+              aria-controls="copy-as-menu"
+              data-role="copy-as"
+              :disabled="!canCopyAs"
+              @mousedown.prevent
+              @click="toggleCopyMenu"
+            />
+            <Menu id="copy-as-menu" ref="copyMenu" :model="copyAsItems" :popup="true" />
           </div>
         </div>
-      </Popover>
 
-      <div
-        ref="stackEl"
-        class="equations-stack"
-        @keydown="handleUnusedKey"
-        @focusout="handleFocusOut"
-      >
-        <div
-          v-for="(equation, index) in equations"
-          :key="lineIds[index]"
-          class="equation-row"
-          :class="[{ active: index === activeIndex }, rowProblemClass(index)]"
-          :data-line="index"
-          :data-line-id="lineIds[index]"
-          @focusin="handleLineFocus(index)"
-        >
-          <div class="equation-label">{{ index + 1 }}</div>
-
-          <MathField
-            :ref="(el) => (fieldRefs[index] = el as InstanceType<typeof MathField> | null)"
-            class="equation-field"
-            :model-value="equation.root"
-            :cursor="equation.cursor"
-            :anchor="equation.anchor ?? null"
-            :active="index === activeIndex"
-            :readonly="readonly"
-            :autofocus="autofocus && index === activeIndex ? true : undefined"
-            :marks="lineMarks[index]"
-            :greek-names="greekNames"
-            :typeset-names="typesetNames"
-            @navigate="handleNavigate(index, $event)"
-            @edit="(state, info) => handleEdit(index, state, info)"
-            @import="handleImport(index, $event)"
-          />
-        </div>
-      </div>
-
-      <!-- Always there, one line high, so the lines never move when a problem
-           appears or goes. -->
-      <div
-        class="status-bar"
-        :class="status ? `status-${status.kind}` : null"
-        data-role="status"
-        :data-kind="status?.kind"
-        :title="statusTitle || undefined"
-        role="status"
-        @mousedown.prevent
-        @click="goToStatusLine"
-      >
-        <template v-if="status?.kind === 'command'">
-          <span class="command-chip" data-role="command"
-            ><span class="command-slash">\</span>{{ status.text }}<span class="command-caret"></span
-          ></span>
-        </template>
-        <template v-else-if="status">
-          <span class="status-text">{{ status.text }}</span>
-          <span v-if="status.more" class="status-more">+{{ status.more }} more</span>
-        </template>
-      </div>
-
-      <p v-if="debug" class="focus-meta">
-        Cursor: <span data-role="cursor">{{ cursorLabel }}</span>
-        <template v-if="selectionLabel">
-          · Selection: <span data-role="selection">{{ selectionLabel }}</span>
-        </template>
-      </p>
-
-      <details class="key-help" data-role="key-help">
-        <summary>Keys and typing</summary>
-        <p class="key-hint">
-          <kbd>←</kbd><kbd>→</kbd> move through every position · <kbd>↑</kbd
-          ><kbd>↓</kbd> numerator/denominator, else previous/next line · <kbd>Home</kbd
-          ><kbd>End</kbd> start/end · <kbd>Tab</kbd> next empty slot · <kbd>Space</kbd> step out of
-          a fraction, exponent or bracket · <kbd>Enter</kbd> new line (in a piecewise: new piece;
-          <kbd>Backspace</kbd> in an empty piece removes it; <code>\otherwise</code> adds one)
-        </p>
-        <p class="key-hint">
-          Select with <kbd>Shift</kbd>+<kbd>←</kbd><kbd>→</kbd>, <kbd>Shift</kbd>+<kbd>Home</kbd
-          ><kbd>End</kbd>, <kbd>Ctrl</kbd>+<kbd>A</kbd> or by dragging · <code>/</code>,
-          <code>^</code>, <code>(</code>, <code>|</code>, <code>\sqrt</code>, <code>\sin</code>, …
-          or a toolbar button then wraps the selection · typing replaces it · <kbd>Esc</kbd> clears
-          it · <kbd>Ctrl</kbd>+<kbd>C</kbd>/<kbd>X</kbd>/<kbd>V</kbd> copy, cut and paste (copies as
-          LaTeX for other apps; pastes LaTeX or plain text such as <code>(x+1)/2</code>)
-        </p>
-        <p class="key-hint">
-          Type letters, numbers and <code>+ − * = ,</code> where the caret is · conditions:
-          <code>&lt; &gt; &lt;= &gt;= !=</code>, <code>&amp;</code> (∧), <code>!</code> (¬),
-          <code>\or</code> (∨) · <code>/</code> makes a fraction of what's before the caret ·
-          <code>^</code> exponent · <code>( )</code> and <code>| |</code> brackets ·
-          <code>0.25{mV}</code> a number's units · letters, digits and <code>_</code> with no
-          operator between them are one name (<code>Vm_init</code>); multiply names with
-          <code>*</code> (<code>a*b</code>) · a name spelling a function (<code>sin</code>,
-          <code>cosh</code>, …) is that function · <code>\</code> commands (<code
-            >\frac \sqrt \root \abs \dd \cases \sin \pi \e \inf \alpha</code
-          >
-          …) · <kbd>Backspace</kbd>/<kbd>Delete</kbd> delete<template v-if="props.history">
-            · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo</template
-          >
-        </p>
-      </details>
-    </div>
-
-    <!-- The host's side content, beside the editor (a units panel, say); the
-         outputs then go under the editor. Without it, the outputs go beside. -->
-    <aside v-if="$slots.side" class="side-column" data-role="side">
-      <slot name="side" />
-    </aside>
-
-    <Card v-if="outputs" class="output-card" data-role="outputs">
-      <template #content>
-        <Tabs v-model:value="outputTab">
-          <TabList>
-            <Tab value="mathml" data-role="tab-mathml">
-              Content MathML
-              <Tag
-                v-if="cellml"
-                class="tab-tag"
-                severity="secondary"
-                value="CellML"
-                data-role="cellml-mode"
-              />
-            </Tab>
-            <Tab value="mathjson" data-role="tab-mathjson">MathJSON</Tab>
-            <Tab value="latex" data-role="tab-latex">LaTeX</Tab>
-            <Tab value="ast" data-role="tab-ast">AST</Tab>
-          </TabList>
-          <TabPanels>
-            <TabPanel value="mathml">
-              <pre data-role="mathml">{{ mathml }}</pre>
-            </TabPanel>
-            <TabPanel value="mathjson">
-              <div class="output-actions">
-                <Button
-                  icon="pi pi-copy"
-                  :label="isCopyingMathJson ? 'Copied' : 'Copy MathJSON'"
-                  size="small"
-                  text
-                  :disabled="!mathjson"
-                  @click="copyMathJson"
-                />
+        <Popover ref="gallery" data-me-popover data-role="gallery" class="me-gallery">
+          <div v-if="galleryGroup" class="gallery">
+            <div
+              v-for="(section, sectionIndex) in galleryGroup.sections"
+              :key="sectionIndex"
+              class="gallery-section"
+            >
+              <div v-if="section.label" class="gallery-label">{{ section.label }}</div>
+              <div class="gallery-items">
+                <button
+                  v-for="item in section.items"
+                  :key="item.title"
+                  type="button"
+                  class="tool-button"
+                  :title="item.title"
+                  @mousedown.prevent
+                  @click="runFromGallery(item.command)"
+                >
+                  <span v-html="buttonHtml(item.latex)"></span>
+                </button>
               </div>
-              <pre data-role="mathjson">{{ mathjson }}</pre>
-            </TabPanel>
-            <TabPanel value="latex">
-              <pre data-role="latex">{{ latex }}</pre>
-            </TabPanel>
-            <TabPanel value="ast">
-              <pre data-role="ast">{{ ast ? JSON.stringify(ast, null, 2) : '' }}</pre>
-            </TabPanel>
-          </TabPanels>
-        </Tabs>
-      </template>
-    </Card>
-  </section>
+            </div>
+          </div>
+        </Popover>
+
+        <!-- While a "\…" command is typed: it, and what it may be. -->
+        <Teleport to="body">
+          <div
+            v-if="commandBuffer !== null"
+            class="command-list"
+            data-me-popover
+            data-role="command-list"
+            :style="commandListStyle"
+            @mousedown.prevent
+          >
+            <span class="command-chip" data-role="command"
+              ><span class="command-slash">\</span>{{ commandBuffer
+              }}<span class="command-caret"></span
+            ></span>
+            <ul
+              v-if="suggestions.length"
+              class="command-options"
+              role="listbox"
+              aria-label="Commands"
+            >
+              <li
+                v-for="(suggestion, index) in suggestions"
+                :key="suggestion.name"
+                class="command-option"
+                :class="{ highlighted: index === highlighted }"
+                role="option"
+                :aria-selected="index === highlighted"
+                :data-command="suggestion.name"
+                @click="chooseCommand(index)"
+              >
+                <span class="command-preview" v-html="buttonHtml(suggestion.latex)"></span>
+                <span class="command-name">\{{ suggestion.name }}</span>
+                <span class="command-title">{{ suggestion.title }}</span>
+              </li>
+            </ul>
+            <p class="command-hint">
+              <template v-if="suggestions.length"
+                ><kbd>↑</kbd><kbd>↓</kbd> choose · <kbd>Tab</kbd> insert ·
+              </template>
+              <kbd>Space</kbd> as typed · <kbd>Esc</kbd> cancel
+            </p>
+          </div>
+        </Teleport>
+
+        <div
+          ref="stackEl"
+          class="equations-stack"
+          @keydown="handleUnusedKey"
+          @focusout="handleFocusOut"
+        >
+          <div
+            v-for="(equation, index) in equations"
+            :key="lineIds[index]"
+            class="equation-row"
+            :class="[
+              { active: index === activeIndex, dragging: index === dragFrom },
+              rowProblemClass(index),
+              dropClass(index),
+            ]"
+            :data-line="index"
+            :data-line-id="lineIds[index]"
+            @focusin="handleLineFocus(index)"
+            @dragover="handleDragOver(index, $event)"
+            @drop="handleDrop"
+          >
+            <!-- The line's number, and what's wrong with it: the handle to drag
+                 it by. -->
+            <div
+              class="equation-label"
+              data-role="line-handle"
+              :draggable="canReorder ? 'true' : undefined"
+              :title="canReorder ? `Drag to reorder (${altKey}+↑/↓)` : undefined"
+              @dragstart="handleDragStart(index, $event)"
+              @dragend="clearDrag"
+            >
+              <span class="line-number">{{ index + 1 }}</span>
+              <i
+                v-if="rowProblemClass(index)"
+                class="pi line-problem"
+                :class="
+                  rowProblemClass(index) === 'has-error'
+                    ? 'pi-exclamation-circle'
+                    : 'pi-exclamation-triangle'
+                "
+                role="img"
+                :aria-label="lineProblemsText(index)"
+                :title="lineProblemsText(index)"
+                data-role="line-problem"
+                :data-kind="rowProblemClass(index) === 'has-error' ? 'error' : 'units'"
+              ></i>
+            </div>
+
+            <MathField
+              :ref="(el) => (fieldRefs[index] = el as InstanceType<typeof MathField> | null)"
+              class="equation-field"
+              :model-value="equation.root"
+              :cursor="equation.cursor"
+              :anchor="equation.anchor ?? null"
+              :active="index === activeIndex"
+              :readonly="readonly"
+              :autofocus="autofocus && index === activeIndex ? true : undefined"
+              :marks="lineMarks[index]"
+              :greek-names="greekNames"
+              :typeset-names="typesetNames"
+              @navigate="handleNavigate(index, $event)"
+              @edit="(state, info) => handleEdit(index, state, info)"
+              @import="handleImport(index, $event)"
+            />
+          </div>
+        </div>
+
+        <!-- The bar shows only when there is a problem or a notice. It is under
+           the lines, so they don't move when it appears or goes. The live
+           region around it is always there (and takes no room), so what
+           appears in it is announced. -->
+        <div role="status">
+          <div
+            v-if="status"
+            class="status-bar"
+            :class="`status-${status.kind}`"
+            data-role="status"
+            :data-kind="status.kind"
+            :title="statusTitle || undefined"
+            @mousedown.prevent
+            @click="goToStatusLine"
+          >
+            <span class="status-text">{{ status.text }}</span>
+            <span v-if="status.more" class="status-more">+{{ status.more }} more</span>
+          </div>
+        </div>
+
+        <p v-if="debug" class="focus-meta">
+          Cursor: <span data-role="cursor">{{ cursorLabel }}</span>
+          <template v-if="selectionLabel">
+            · Selection: <span data-role="selection">{{ selectionLabel }}</span>
+          </template>
+        </p>
+
+        <details class="key-help" data-role="key-help">
+          <summary>Keys and typing</summary>
+          <p class="key-hint">
+            <kbd>←</kbd><kbd>→</kbd> move through every position · <kbd>↑</kbd
+            ><kbd>↓</kbd> numerator/denominator, else previous/next line · <kbd>Home</kbd
+            ><kbd>End</kbd> start/end · <kbd>Tab</kbd> next empty slot · <kbd>Space</kbd> step out
+            of a fraction, exponent or bracket · <kbd>Enter</kbd> new line (in a piecewise: new
+            piece; <kbd>Backspace</kbd> in an empty piece removes it; <code>\otherwise</code> adds
+            one) · <kbd>{{ altKey }}</kbd
+            >+<kbd>↑</kbd><kbd>↓</kbd> move the line up/down, or drag it by its number
+          </p>
+          <p class="key-hint">
+            Select with <kbd>Shift</kbd>+<kbd>←</kbd><kbd>→</kbd>, <kbd>Shift</kbd>+<kbd>Home</kbd
+            ><kbd>End</kbd>, <kbd>{{ modKey }}</kbd
+            >+<kbd>A</kbd> or by dragging · <code>/</code>, <code>^</code>, <code>(</code>,
+            <code>|</code>, <code>\sqrt</code>, <code>\sin</code>, … or a toolbar button then wraps
+            the selection · typing replaces it · <kbd>Esc</kbd> clears it · <kbd>{{ modKey }}</kbd
+            >+<kbd>C</kbd>/<kbd>X</kbd>/<kbd>V</kbd> copy, cut and paste (copies as LaTeX for other
+            apps; pastes LaTeX or plain text such as <code>(x+1)/2</code>)
+          </p>
+          <p class="key-hint">
+            Type letters, numbers and <code>+ − * = ,</code> where the caret is · conditions:
+            <code>&lt; &gt; &lt;= &gt;= !=</code>, <code>&amp;</code> (∧), <code>!</code> (¬),
+            <code>\or</code> (∨) · <code>/</code> makes a fraction of what's before the caret ·
+            <code>^</code> exponent · <code>( )</code> and <code>| |</code> brackets ·
+            <code>0.25{mV}</code> a number's units · letters, digits and <code>_</code> with no
+            operator between them are one name (<code>Vm_init</code>); multiply names with
+            <code>*</code> (<code>a*b</code>) · a name spelling a function (<code>sin</code>,
+            <code>cosh</code>, …) is that function · <code>\</code> commands (<code
+              >\frac \sqrt \root \abs \dd \cases \sin \pi \e \inf \alpha</code
+            >
+            …) · <kbd>Backspace</kbd>/<kbd>Delete</kbd> delete<template v-if="props.history">
+              · <kbd>{{ modKey }}</kbd
+              >+<kbd>Z</kbd> undo</template
+            >
+          </p>
+        </details>
+      </div>
+
+      <!-- The host's side content, beside the editor (a units panel, say); the
+         outputs then go under the editor. Without it, the outputs go beside. -->
+      <aside v-if="$slots.side" class="side-column" data-role="side">
+        <slot name="side" />
+      </aside>
+
+      <Card v-if="outputs" class="output-card" data-role="outputs">
+        <template #content>
+          <Tabs v-model:value="outputTab">
+            <TabList>
+              <Tab value="mathml" data-role="tab-mathml">
+                Content MathML
+                <Tag
+                  v-if="cellml"
+                  class="tab-tag"
+                  severity="secondary"
+                  value="CellML"
+                  data-role="cellml-mode"
+                />
+              </Tab>
+              <Tab value="mathjson" data-role="tab-mathjson">MathJSON</Tab>
+              <Tab value="latex" data-role="tab-latex">LaTeX</Tab>
+              <Tab value="ast" data-role="tab-ast">AST</Tab>
+            </TabList>
+            <TabPanels>
+              <TabPanel value="mathml">
+                <pre data-role="mathml">{{ mathml }}</pre>
+              </TabPanel>
+              <TabPanel value="mathjson">
+                <div class="output-actions">
+                  <Button
+                    icon="pi pi-copy"
+                    :label="isCopyingMathJson ? 'Copied' : 'Copy MathJSON'"
+                    size="small"
+                    text
+                    :disabled="!mathjson"
+                    @click="copyMathJson"
+                  />
+                </div>
+                <pre data-role="mathjson">{{ mathjson }}</pre>
+              </TabPanel>
+              <TabPanel value="latex">
+                <pre data-role="latex">{{ latex }}</pre>
+              </TabPanel>
+              <TabPanel value="ast">
+                <pre data-role="ast">{{ ast ? JSON.stringify(ast, null, 2) : '' }}</pre>
+              </TabPanel>
+            </TabPanels>
+          </Tabs>
+        </template>
+      </Card>
+    </section>
+  </div>
 </template>
 
 <style scoped>
+.me-workbench {
+  container-type: inline-size;
+}
+
 /* Colours follow the host's PrimeVue theme (light or dark), with light
-   fallbacks. The accent is the editor's own blue unless the host sets
-   --math-editor-accent. The gallery is teleported out of the grid, so it
-   gets them too. */
+   fallbacks. The accent (and the caret, selection and focus drawn from it),
+   the problem colours and number units' colour are the editor's own unless
+   the host sets --math-editor-accent, -danger, -warn or -units. MathField
+   draws with these too. The gallery and the command list are teleported out
+   of the grid, so they get them as well. */
 .editor-grid,
-.gallery {
+.gallery,
+.command-list {
   --me-accent: var(--math-editor-accent, #2563eb);
   --me-surface: var(--p-content-background, #ffffff);
   --me-subtle: var(--p-content-hover-background, #f1f5f9);
@@ -1159,12 +1487,18 @@ function toggleCopyMenu(event: Event) {
   --me-text: var(--p-text-color, #0f172a);
   --me-muted: var(--p-text-muted-color, #64748b);
   /* Notices: a tint of the colour behind, text part way to the theme's. */
-  --me-warn: #d97706;
-  --me-caution: #ea580c;
-  --me-danger: #dc2626;
+  --me-warn: var(--math-editor-warn, #d97706);
+  --me-caution: var(--math-editor-warn, #ea580c);
+  --me-danger: var(--math-editor-danger, #dc2626);
+  --me-units: var(--math-editor-units, #60a5fa);
+  /* Tooltips, the output panels and the command chip: dark in both modes. */
+  --me-tip-bg: #1e293b;
+  --me-tip-text: #f8fafc;
+  --me-code-bg: #0f172a;
+  --me-code-text: #e2e8f0;
+}
 
-  max-width: 1240px;
-  margin: 0 auto;
+.editor-grid {
   display: grid;
   gap: 1rem;
   grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
@@ -1212,7 +1546,7 @@ function toggleCopyMenu(event: Event) {
   grid-area: side;
   align-self: start;
   position: sticky;
-  top: 1rem;
+  top: var(--me-side-top, calc(var(--me-toolbar-top, 0px) + 1rem));
   min-width: 0;
 }
 
@@ -1250,10 +1584,30 @@ function toggleCopyMenu(event: Event) {
   gap: 0.25rem;
 }
 
+.toolbar-tools {
+  /* The room the other groups leave, whatever the tools' own width: what
+     fits is worked out from it (fitTools), the rest go in "More ▾". */
+  flex: 1 1 0;
+  min-width: 4.5rem;
+  flex-wrap: nowrap;
+  position: relative;
+}
+
+/* In "More ▾": kept, out of the way, to be measured. */
+.tool-button.overflowed {
+  position: absolute;
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .toolbar-lines :deep(.p-button) {
   width: 2rem;
   height: 2rem;
   padding: 0;
+}
+
+.redo-button :deep(.p-button-icon) {
+  transform: scaleX(-1);
 }
 
 .tool-button {
@@ -1326,6 +1680,7 @@ function toggleCopyMenu(event: Event) {
 }
 
 .equation-row {
+  position: relative;
   display: flex;
   align-items: stretch;
   gap: 0.5rem;
@@ -1360,14 +1715,65 @@ function toggleCopyMenu(event: Event) {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--me-warn) 16%, transparent);
 }
 
+/* The number, over the problem icon if there is one: as wide either way, so
+   the line doesn't move when a problem appears. */
 .equation-label {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  padding: 0 0.4rem 0 0.65rem;
+  justify-content: center;
+  gap: 0.1rem;
+  min-width: 2.1rem;
+  padding: 0 0.35rem;
   color: var(--me-muted);
   font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
   border-right: 1px solid var(--me-border);
+  border-radius: calc(0.65rem - 1px) 0 0 calc(0.65rem - 1px);
+  user-select: none;
+}
+
+.equation-label[draggable='true'] {
+  cursor: grab;
+}
+
+.equation-label[draggable='true']:hover {
+  background: var(--me-subtle);
+}
+
+.line-problem {
+  font-size: 0.7rem;
+  color: var(--me-danger);
+}
+
+.line-problem.pi-exclamation-triangle {
+  color: var(--me-warn);
+}
+
+/* A line being dragged, and where it would land: a line in the gap. */
+.equation-row.dragging {
+  opacity: 0.5;
+}
+
+.equation-row.drop-before::before,
+.equation-row.drop-after::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--me-accent);
+  pointer-events: none;
+}
+
+/* Halfway across the 0.6rem gap between lines, outside the border. */
+.equation-row.drop-before::before {
+  top: calc(-0.3rem - 2px);
+}
+
+.equation-row.drop-after::after {
+  bottom: calc(-0.3rem - 2px);
 }
 
 .equation-field {
@@ -1424,31 +1830,110 @@ function toggleCopyMenu(event: Event) {
   color: color-mix(in srgb, var(--me-accent) 45%, var(--me-text));
 }
 
-.status-command {
+/* The command list: over everything, the host's dialogs included. */
+.command-list {
+  position: fixed;
+  z-index: 1300;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  width: max-content;
+  min-width: 17.5rem;
+  max-width: 20rem;
+  padding: 0.4rem;
+  border: 1px solid var(--me-border);
+  border-radius: 0.55rem;
+  background: var(--me-surface);
+  color: var(--me-text);
+  box-shadow: 0 6px 24px rgba(15, 23, 42, 0.14);
+  font-size: 0.8rem;
+}
+
+.command-list .command-chip {
+  align-self: flex-start;
+}
+
+.command-options {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
   padding: 0;
+  list-style: none;
+}
+
+.command-option {
+  display: grid;
+  grid-template-columns: 2.4rem auto 1fr;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 1.9rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.35rem;
+  cursor: pointer;
+}
+
+.command-option:hover {
+  background: var(--me-subtle);
+}
+
+.command-option.highlighted {
+  background: color-mix(in srgb, var(--me-accent) 12%, var(--me-surface));
+}
+
+.command-preview {
+  text-align: center;
+  font-size: 0.85rem;
+}
+
+.command-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+}
+
+.command-title {
+  justify-self: end;
+  color: var(--me-muted);
+  font-size: 0.72rem;
+}
+
+.command-hint {
+  margin: 0;
+  padding: 0.3rem 0.4rem 0;
+  border-top: 1px solid var(--me-border);
+  color: var(--me-muted);
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
+.command-hint kbd {
+  padding: 0 0.25rem;
+  border: 1px solid var(--me-border-strong);
+  border-radius: 0.25rem;
+  background: var(--me-subtle);
+  font-family: inherit;
+  font-size: 0.65rem;
 }
 
 .command-chip {
   display: inline-flex;
   align-items: center;
-  height: 100%;
+  height: 1.6rem;
   padding: 0 0.6rem;
   border-radius: 0.45rem;
-  background: #0f172a;
-  color: #e2e8f0;
+  background: var(--me-code-bg);
+  color: var(--me-code-text);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
   font-size: 0.9rem;
 }
 
 .command-slash {
-  color: #7dd3fc;
+  color: var(--me-units);
 }
 
 .command-caret {
   width: 2px;
   height: 1em;
   margin-left: 2px;
-  background: #e2e8f0;
+  background: var(--me-code-text);
   animation: chip-blink 1s step-end infinite;
 }
 
@@ -1517,14 +2002,15 @@ function toggleCopyMenu(event: Event) {
   max-height: 28rem;
   overflow: auto;
   border-radius: 0.55rem;
-  background: #0f172a;
-  color: #e2e8f0;
+  background: var(--me-code-bg);
+  color: var(--me-code-text);
   padding: 0.85rem;
   font-size: 0.83rem;
   line-height: 1.35;
 }
 
-@media (max-width: 900px) {
+/* Narrow (the workbench's own width, not the window's): one column. */
+@container (max-width: 900px) {
   .editor-grid,
   .editor-grid.has-side,
   .editor-grid.no-outputs.has-side {
