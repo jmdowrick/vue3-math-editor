@@ -48,7 +48,7 @@ test('one equation goes in at the caret, with its numbers’ units', async () =>
   await paste('<apply><plus/><ci>x</ci><cn cellml:units="mV">2.5</cn></apply>')
   await wb.expectMathJson(['Equal', 'y', ['Add', 'x', 2.5]])
   await expect(wb.line(0).locator('.me-units-flag')).toHaveCount(1)
-  await expect(notice()).toBeEmpty()
+  await expect(notice()).toHaveCount(0)
   expect(await lineMathml(0)).toContain('<cn cellml:units="mV">2.5</cn>')
 })
 
@@ -96,7 +96,7 @@ test('what can’t be read is left out, and a problem of its line until it is ed
   ).toBe(false)
 
   await wb.type('2')
-  await expect(notice()).toBeEmpty()
+  await expect(notice()).toHaveCount(0)
   await expect(wb.page.locator('[data-line="0"]')).not.toHaveClass(/has-error/)
 })
 

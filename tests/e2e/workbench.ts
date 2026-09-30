@@ -30,14 +30,15 @@ export class Workbench {
     )
   }
 
-  // The status bar under the lines: the first problem, the command being
-  // typed, or a notice.
+  // The status bar under the lines, there only when it has something to say:
+  // the first problem, or a notice.
   status(): Locator {
     return this.page.locator('[data-role="status"]')
   }
 
   // Every problem shown (the status bar's title), without "Line N: ".
   async problems(): Promise<string[]> {
+    if ((await this.status().count()) === 0) return []
     const title = (await this.status().getAttribute('title')) ?? ''
     return title ? title.split('\n').map((text) => text.replace(/^Line \d+: /, '')) : []
   }

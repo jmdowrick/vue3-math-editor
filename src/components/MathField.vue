@@ -492,7 +492,22 @@ function handlePaste(event: ClipboardEvent) {
   if (atoms.length > 0) emit('edit', insertAtoms(atoms)(state()), OTHER_EDIT)
 }
 
-defineExpose({ focus: () => surfaceEl.value?.focus() })
+// The caret's place on the screen (client coordinates), in an empty slot too:
+// for the workbench's command list, shown at it.
+function caretRect(): DOMRect | null {
+  const container = surfaceEl.value
+  const box = container ? caretBox(container, props.modelValue, props.cursor) : null
+  if (!container || !box) return null
+  const base = container.getBoundingClientRect()
+  return new DOMRect(
+    base.left + box.left - container.scrollLeft,
+    base.top + box.top - container.scrollTop,
+    0,
+    box.height,
+  )
+}
+
+defineExpose({ focus: () => surfaceEl.value?.focus(), caretRect })
 </script>
 
 <template>
@@ -540,7 +555,12 @@ defineExpose({ focus: () => surfaceEl.value?.focus() })
 </template>
 
 <style scoped>
+/* Colours are the workbench's (--me-accent and the rest, which a host can
+   set: see EquationWorkbench.vue), with its defaults as fallbacks. */
 .math-field {
+  --mf-accent: var(--me-accent, #2563eb);
+  --mf-units: var(--me-units, #60a5fa);
+
   position: relative;
   /* A host can set it on anything around the editor. */
   font-size: var(--me-line-font-size, 1.05rem);
@@ -555,7 +575,7 @@ defineExpose({ focus: () => surfaceEl.value?.focus() })
 }
 
 .math-field.focused {
-  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.35);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--mf-accent) 35%, transparent);
 }
 
 .math-content {
@@ -576,51 +596,62 @@ defineExpose({ focus: () => surfaceEl.value?.focus() })
   position: absolute;
   z-index: 0;
   border-radius: 3px;
-  background: rgba(37, 99, 235, 0.07);
-  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.18);
+  background: color-mix(in srgb, var(--mf-accent) 7%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mf-accent) 18%, transparent);
   pointer-events: none;
 }
 
 .math-field.focused .selection {
-  background: rgba(37, 99, 235, 0.2);
+  background: color-mix(in srgb, var(--mf-accent) 20%, transparent);
 }
 
+/* A problem: a tint, and a wavy underline drawn in the problem's colour
+   through a mask (a colour can't be a variable inside an SVG data URL). */
 .mark {
+  --mark-color: var(--me-danger, #dc2626);
+
   position: absolute;
   z-index: 0;
   pointer-events: none;
   border-radius: 2px;
-  background:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='3'%3E%3Cpath d='M0 2.5 L1.5 0.5 L3 2.5 L4.5 0.5 L6 2.5' fill='none' stroke='%23dc2626' stroke-width='1'/%3E%3C/svg%3E")
-      repeat-x left bottom / 6px 3px,
-    rgba(220, 38, 38, 0.08);
+  background: color-mix(in srgb, var(--mark-color) 8%, transparent);
+}
+
+.mark::after {
+  --wave: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='3'%3E%3Cpath d='M0 2.5 L1.5 0.5 L3 2.5 L4.5 0.5 L6 2.5' fill='none' stroke='black' stroke-width='1'/%3E%3C/svg%3E");
+
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--mark-color);
+  -webkit-mask: var(--wave) repeat-x left bottom / 6px 3px;
+  mask: var(--wave) repeat-x left bottom / 6px 3px;
 }
 
 /* A units problem: amber. */
 .mark-units {
-  background:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='3'%3E%3Cpath d='M0 2.5 L1.5 0.5 L3 2.5 L4.5 0.5 L6 2.5' fill='none' stroke='%23d97706' stroke-width='1'/%3E%3C/svg%3E")
-      repeat-x left bottom / 6px 3px,
-    rgba(217, 119, 6, 0.1);
+  --mark-color: var(--me-warn, #d97706);
+
+  background: color-mix(in srgb, var(--mark-color) 10%, transparent);
 }
 
 /* A number's units, while shown: upright and light blue after it. */
 .math-field :deep(.me-units) {
-  color: #60a5fa;
+  color: var(--mf-units);
 }
 
 /* An empty units slot, labelled "units": dashed and light blue, unlike the
    box of an empty fraction or exponent. */
 .math-field :deep(.me-ph.me-units-ph) {
   padding: 0 0.15em;
-  border: 1px dashed #60a5fa;
+  border: 1px dashed var(--mf-units);
   border-radius: 3px;
-  color: #60a5fa;
+  color: var(--mf-units);
 }
 
 .math-field.focused :deep(.me-units-ph.me-ph-active) {
-  color: #3b82f6;
-  background: rgba(96, 165, 250, 0.12);
+  color: color-mix(in srgb, var(--mf-units) 75%, var(--mf-accent));
+  background: color-mix(in srgb, var(--mf-units) 12%, transparent);
 }
 
 /* Hidden units: a very small triangle in the number's top right corner. */
@@ -636,7 +667,7 @@ defineExpose({ focus: () => surfaceEl.value?.focus() })
   position: absolute;
   right: -0.05em;
   bottom: 0.52em;
-  border-top: 0.22em solid #60a5fa;
+  border-top: 0.22em solid var(--mf-units);
   border-left: 0.22em solid transparent;
 }
 
@@ -657,8 +688,8 @@ defineExpose({ focus: () => surfaceEl.value?.focus() })
   max-width: 24rem;
   padding: 0.25rem 0.5rem;
   border-radius: 0.35rem;
-  background: #1e293b;
-  color: #f8fafc;
+  background: var(--me-tip-bg, #1e293b);
+  color: var(--me-tip-text, #f8fafc);
   font-size: 0.75rem;
   line-height: 1.3;
   white-space: normal;
@@ -670,7 +701,7 @@ defineExpose({ focus: () => surfaceEl.value?.focus() })
   z-index: 2;
   width: 2px;
   margin-left: -1px;
-  background: #2563eb;
+  background: var(--mf-accent);
   pointer-events: none;
   animation: math-field-blink 1.1s step-end infinite;
 }
@@ -685,12 +716,12 @@ defineExpose({ focus: () => surfaceEl.value?.focus() })
 }
 
 .math-field :deep(.me-ph) {
-  color: #94a3b8;
+  color: color-mix(in srgb, var(--me-muted, #64748b) 70%, transparent);
 }
 
 .math-field.focused :deep(.me-ph-active) {
-  color: #2563eb;
-  background: rgba(37, 99, 235, 0.12);
+  color: var(--mf-accent);
+  background: color-mix(in srgb, var(--mf-accent) 12%, transparent);
   border-radius: 2px;
 }
 

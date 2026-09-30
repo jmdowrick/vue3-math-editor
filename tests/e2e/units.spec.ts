@@ -88,6 +88,11 @@ test('issues are underlined in amber on the right line, and shown in the status 
   // The line is outlined, and the status bar names it; a click there goes to it.
   await expect(wb.page.locator('[data-line="0"]')).toHaveClass(/has-units-issue/)
   await expect(wb.page.locator('[data-line="1"]')).not.toHaveClass(/has-units-issue/)
+  // Not by colour alone: an icon beside the number says so.
+  const icon = wb.page.locator('[data-line="0"] [data-role="line-problem"]')
+  await expect(icon).toHaveAttribute('data-kind', 'units')
+  await expect(icon).toHaveAttribute('title', "'v' and 't' have different units")
+  await expect(wb.page.locator('[data-line="1"] [data-role="line-problem"]')).toHaveCount(0)
   await expect(wb.status()).toHaveAttribute('data-kind', 'units')
   await expect(wb.status()).toContainText("Line 1: 'v' and 't' have different units")
   await wb.status().click()

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  commandSuggestions,
   deleteBackward,
   emptyState,
   insertFraction,
@@ -9,6 +10,7 @@ import {
 } from '../src/editor/commands'
 import { type Cursor, isValidCursor, moveRight } from '../src/editor/cursor'
 import { commandForKey } from '../src/editor/keymap'
+import { row } from '../src/editor/layout'
 import { parseRow } from '../src/editor/parse'
 import { json, press, show, type } from './editorHelpers'
 
@@ -318,5 +320,44 @@ describe('invariants', () => {
     insertFraction(state)
     press(state, 'Backspace', 'Delete', '(', ')', 'Tab', ' ')
     expect(JSON.stringify(state)).toBe(frozen)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The command list
+// ---------------------------------------------------------------------------
+
+describe('command suggestions', () => {
+  const names = (prefix: string, limit?: number) =>
+    commandSuggestions(prefix, limit).map((suggestion) => suggestion.name)
+
+  it('lists what the prefix may be, the structures first', () => {
+    expect(names('fr')).toEqual(['frac'])
+    expect(names('s')).toEqual(['sqrt', 'sin', 'sec', 'sinh', 'sech', 'sigma'])
+    expect(names('xyz')).toEqual([])
+  })
+
+  it('puts what the prefix is exactly first', () => {
+    expect(names('e')[0]).toBe('e')
+    expect(names('le')[0]).toBe('le')
+    expect(names('alpha')).toEqual(['alpha'])
+  })
+
+  it('shows the shortest spelling that fits', () => {
+    expect(names('arcs')).toEqual(['arcsin', 'arcsec', 'arcsinh', 'arcsech'])
+    expect(names('ceil')).toEqual(['ceil'])
+  })
+
+  it('gives a spelling two could claim to the one namedCommand runs', () => {
+    const pi = commandSuggestions('pi').filter((suggestion) => suggestion.name === 'pi')
+    expect(pi).toEqual([{ name: 'pi', title: 'Pi', latex: '\\pi' }])
+  })
+
+  it('lists nothing that would only be typed out as a name', () => {
+    const shape = (atoms: unknown) =>
+      JSON.stringify(atoms, (key, value: unknown) => (key === 'id' ? undefined : value))
+    for (const name of names('', 1000)) {
+      expect(shape(namedCommand(name)(emptyState()).root), name).not.toBe(shape(row(name)))
+    }
   })
 })
