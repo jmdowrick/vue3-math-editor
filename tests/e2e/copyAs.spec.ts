@@ -137,3 +137,77 @@ test('the LaTeX panel shows the same LaTeX as copying', async () => {
   await copyAs('LaTeX')
   await expect.poll(readClipboard).toBe(expected)
 })
+
+test.describe('several lines', () => {
+  const handle = (line: number) =>
+    wb.page.locator(`[data-line="${line}"] [data-role="line-handle"]`)
+  const selected = () => wb.page.locator('[data-line][data-selected]')
+
+  test.beforeEach(async () => {
+    await wb.type('y=2x')
+    await wb.press('Enter')
+    await wb.type('z=y+1')
+    await wb.press('Enter')
+    await wb.type('w=z')
+    await wb.focusLine(0)
+  })
+
+  test('Shift+click a number selects the lines from the active one, copied as one', async () => {
+    await handle(2).click({ modifiers: ['Shift'] })
+    await expect(selected()).toHaveCount(3)
+    await expect(button()).toContainText('Copy 3 lines as')
+    await expect(wb.line(0)).toBeFocused()
+
+    await copyAs('MathJSON')
+    await expect
+      .poll(async () => JSON.parse(await readClipboard()))
+      .toEqual([
+        ['Equal', 'y', ['Multiply', 2, 'x']],
+        ['Equal', 'z', ['Add', 'y', 1]],
+        ['Equal', 'w', 'z'],
+      ])
+    // Still selected, to copy again.
+    await expect(selected()).toHaveCount(3)
+
+    await copyAs('LaTeX')
+    await expect
+      .poll(readClipboard)
+      .toBe(
+        ['\\begin{aligned}', 'y &= 2x \\\\', 'z &= y+1 \\\\', 'w &= z', '\\end{aligned}'].join(
+          '\n',
+        ),
+      )
+
+    await copyAs('Content MathML')
+    await expect.poll(async () => (await readClipboard()).match(/<math\b/g)).toHaveLength(1)
+    await expect.poll(async () => (await readClipboard()).match(/<eq\/>/g)).toHaveLength(3)
+  })
+
+  test('Ctrl/Cmd+click adds or removes one line', async () => {
+    await handle(2).click({ modifiers: ['ControlOrMeta'] })
+    await expect(selected()).toHaveCount(2)
+    await expect(wb.page.locator('[data-line="1"][data-selected]')).toHaveCount(0)
+
+    await handle(0).click({ modifiers: ['ControlOrMeta'] })
+    await expect(selected()).toHaveCount(1)
+    await expect(button()).toContainText('Copy line 3 as')
+    await copyAs('MathJSON')
+    await expect.poll(async () => JSON.parse(await readClipboard())).toEqual(['Equal', 'w', 'z'])
+  })
+
+  test('Escape, typing or a click into a line clears them', async () => {
+    await handle(1).click({ modifiers: ['Shift'] })
+    await expect(selected()).toHaveCount(2)
+    await wb.press('Escape')
+    await expect(selected()).toHaveCount(0)
+    await expect(button()).toHaveText(/Copy as/)
+
+    await handle(1).click({ modifiers: ['Shift'] })
+    await wb.type('1')
+    await expect(selected()).toHaveCount(0)
+
+    await handle(2).click({ modifiers: ['Shift'] })
+    await wb.line(2).click()
+    await expect(selected()).toHaveCount(0)
+  })
+})

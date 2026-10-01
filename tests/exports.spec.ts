@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
 import { latexToRow } from '../src/editor/clipboard'
-import { CELLML_NAMESPACE, contentMathML, exportRow, formatXml } from '../src/editor/exports'
+import {
+  CELLML_NAMESPACE,
+  contentMathML,
+  exportRow,
+  exportRows,
+  formatXml,
+} from '../src/editor/exports'
+import { importContentMathML } from '../src/editor/mathmlImport'
 import { selectedAtoms } from '../src/editor/selection'
 import { press, type } from './editorHelpers'
 
@@ -123,5 +130,52 @@ describe('exportRow', () => {
       ['Missing'],
       'b',
     ])
+  })
+})
+
+describe('several lines', () => {
+  const rows = () => [latexToRow('y=2x'), latexToRow('z=y+1')]
+
+  it('are one <math> in Content MathML, which reads back as the same lines', () => {
+    const mathml = exportRows(rows(), 'mathml')
+    expect(mathml.match(/<math\b/g)).toHaveLength(1)
+    expect(mathml.match(/<eq\/>/g)).toHaveLength(2)
+    const read = importContentMathML(mathml)!
+    expect(read.equations.map((row) => exportRow(row, 'mathjson'))).toEqual(
+      rows().map((row) => exportRow(row, 'mathjson')),
+    )
+  })
+
+  it('declare the CellML namespace once in CellML mode', () => {
+    const mathml = exportRows(rows(), 'mathml', { cellml: true })
+    expect(mathml.match(new RegExp(`xmlns:cellml="${CELLML_NAMESPACE}"`, 'g'))).toHaveLength(1)
+    expect(mathml).toContain('<cn cellml:units="dimensionless">1</cn>')
+  })
+
+  it('are an array in MathJSON', () => {
+    expect(JSON.parse(exportRows(rows(), 'mathjson'))).toEqual([
+      ['Equal', 'y', ['Multiply', 2, 'x']],
+      ['Equal', 'z', ['Add', 'y', 1]],
+    ])
+  })
+
+  it('are an aligned block in LaTeX, aligned at the equals sign', () => {
+    expect(exportRows([...rows(), latexToRow('a+b')], 'latex')).toBe(
+      ['\\begin{aligned}', 'y &= 2x \\\\', 'z &= y+1 \\\\', '&a+b', '\\end{aligned}'].join('\n'),
+    )
+  })
+
+  it('align at the equals sign of the line, not one inside a structure', () => {
+    const row = latexToRow(
+      '\\left\\{\\begin{array}{ll}1 & x=1\\\\0 & \\text{otherwise}\\end{array}\\right.',
+    )
+    expect(exportRows([row, latexToRow('y=1')], 'latex')).toMatch(/^\\begin\{aligned\}\n&\\left/)
+  })
+
+  it('leave out empty lines, and one line is as exportRow has it', () => {
+    const one = latexToRow('y=2x')
+    for (const format of ['latex', 'mathjson', 'mathml'] as const) {
+      expect(exportRows([[], one, []], format)).toBe(exportRow(one, format))
+    }
   })
 })

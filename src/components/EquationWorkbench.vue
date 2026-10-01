@@ -21,7 +21,9 @@
 // - `issues` prop: units issues to underline, by line id and variable names.
 // - `variableUnits` prop: each variable's units, shown on hover; with it,
 //   numbers show their units on hover too.
-// - `outputs` prop: the output panels and "Copy as" (on by default).
+// - `outputs` prop: the output panels and "Copy as" (on by default), which
+//   copies the selection, the active line, or the lines selected by
+//   Shift/Ctrl/Cmd+clicking their numbers.
 // - `history` prop: the workbench's own undo/redo (on by default); off, a host
 //   with its own undo history gets Ctrl/Cmd+Z and Y.
 // - `setMathML(xml)` and `focus()`, exposed: set every line from Content
@@ -56,7 +58,13 @@ import {
   namedCommand,
 } from '../editor/commands'
 import { cursorAtEnd, describeCursor } from '../editor/cursor'
-import { EXPORT_FORMATS, type ExportFormat, contentMathML, exportRow } from '../editor/exports'
+import {
+  EXPORT_FORMATS,
+  type ExportFormat,
+  contentMathML,
+  exportRow,
+  exportRows,
+} from '../editor/exports'
 import { type EditInfo, History, OTHER_EDIT, undoGroup } from '../editor/history'
 import {
   type EquationLine,
@@ -265,10 +273,12 @@ function handleEdit(index: number, next: EditorState, info: EditInfo) {
   edited(index)
 }
 
-// A line's content changed: what was said about its import no longer holds.
+// A line's content changed: what was said about its import no longer holds,
+// and the lines selected are no longer.
 function edited(index: number) {
   importProblems.value.delete(lineIds.value[index])
   importNotice.value = null
+  clearLineSelection()
 }
 
 // Cursor moves and selection changes: not recorded in undo history, but the
@@ -287,6 +297,7 @@ function replaceLines(roots: readonly Row[], problems: readonly (readonly string
   equations.value = states.length ? states : [emptyState()]
   lineIds.value = equations.value.map(() => newLineId())
   activeIndex.value = 0
+  clearLineSelection()
   importProblems.value = new Map(
     lineIds.value.flatMap((id, index) => (problems[index]?.length ? [[id, problems[index]]] : [])),
   )
@@ -430,6 +441,7 @@ function addLineAfterActive(reason: 'enter' | 'new-line') {
 function moveToLine(index: number) {
   if (index < 0 || index >= equations.value.length) return
   if (index !== activeIndex.value) commitLine(activeIndex.value, 'navigate')
+  clearLineSelection()
   undoHistory.breakGroup()
   activeIndex.value = index
   focusActive()
@@ -440,6 +452,7 @@ function moveToLine(index: number) {
 function handleLineFocus(index: number) {
   if (index === activeIndex.value) return
   commandBuffer.value = null
+  clearLineSelection()
   commitLine(activeIndex.value, 'navigate')
   activeIndex.value = index
 }
@@ -564,6 +577,62 @@ function dropClass(index: number) {
 }
 
 // ---------------------------------------------------------------------------
+// Selecting lines, for "Copy as": Shift+click a line's number for the lines
+// from the active one to it, Ctrl/Cmd+click to add or remove one
+// ---------------------------------------------------------------------------
+
+// By id, so the selection goes with lines that move; a line removed leaves it.
+const selectedLineIds = ref(new Set<string>())
+// The selected lines' indexes, in order.
+const selectedLines = computed(() =>
+  lineIds.value.flatMap((id, index) => (selectedLineIds.value.has(id) ? [index] : [])),
+)
+const hasLineSelection = computed(() => selectedLines.value.length > 0)
+const isLineSelected = (index: number) => selectedLineIds.value.has(lineIds.value[index])
+
+function clearLineSelection() {
+  if (selectedLineIds.value.size) selectedLineIds.value = new Set()
+}
+
+const selectsLines = (event: MouseEvent) => event.shiftKey || event.metaKey || event.ctrlKey
+
+// A Shift/Ctrl/Cmd press on a line's number. A plain press is left to drag
+// the line by.
+function handleLabelMousedown(index: number, event: MouseEvent) {
+  if (!props.outputs || !selectsLines(event)) return
+  // Focus stays in the active line, and no drag starts.
+  event.preventDefault()
+  const ids = lineIds.value
+  if (event.shiftKey) {
+    const [from, to] = [activeIndex.value, index].sort((a, b) => a - b)
+    selectedLineIds.value = new Set(ids.slice(from, to + 1))
+    return
+  }
+  // The selection starts with the active line.
+  const next = new Set(
+    selectedLineIds.value.size ? selectedLineIds.value : [ids[activeIndex.value]],
+  )
+  if (next.has(ids[index])) next.delete(ids[index])
+  else next.add(ids[index])
+  selectedLineIds.value = next
+}
+
+// Any other press in the lines (into a line, or to drag one) clears them.
+function handleStackMousedown(event: MouseEvent) {
+  const onLabel = (event.target as Element | null)?.closest?.('[data-role="line-handle"]')
+  if (!(onLabel && selectsLines(event))) clearLineSelection()
+}
+
+// What a line's number does, on hover.
+const labelTitle = computed(() => {
+  const parts = [
+    canReorder.value && `Drag to reorder (${altKey}+↑/↓)`,
+    props.outputs && `Shift+click or ${modKey}+click to select lines to copy`,
+  ]
+  return parts.filter(Boolean).join(' · ') || undefined
+})
+
+// ---------------------------------------------------------------------------
 // Keyboard: command mode and shortcuts (capture phase, before MathField)
 // ---------------------------------------------------------------------------
 
@@ -638,6 +707,14 @@ function handleCaptureKeydown(event: KeyboardEvent) {
 
   if (commandBuffer.value !== null) {
     handleCommandModeKey(event)
+    return
+  }
+
+  // Escape clears the lines selected first, then (MathField) the selection.
+  if (event.key === 'Escape' && hasLineSelection.value) {
+    event.preventDefault()
+    event.stopPropagation()
+    clearLineSelection()
     return
   }
 
@@ -1046,20 +1123,29 @@ const copiedFormat = ref<string | null>(null)
 let copiedTimer: number | undefined
 
 const hasSelection = computed(() => selectionOf(active()) !== null)
-const canCopyAs = computed(() => active().root.length > 0)
+const canCopyAs = computed(() =>
+  hasLineSelection.value
+    ? selectedLines.value.some((index) => equations.value[index].root.length > 0)
+    : active().root.length > 0,
+)
 
 const copyAsLabel = computed(() => {
   if (copiedFormat.value) return `Copied ${copiedFormat.value}`
+  const count = selectedLines.value.length
+  if (count > 1) return `Copy ${count} lines as`
+  if (count === 1) return `Copy line ${selectedLines.value[0] + 1} as`
   return hasSelection.value ? 'Copy selection as' : 'Copy as'
 })
 
-// The selection if there is one, otherwise the whole active equation.
+// The lines selected, as one document (exportRows), if any are; otherwise the
+// selection if there is one, or the whole active equation.
 async function copyAs(format: ExportFormat, label: string) {
-  const state = active()
-  const atoms = selectionOf(state) ? selectedAtoms(state) : state.root
+  const rows = hasLineSelection.value
+    ? selectedLines.value.map((index) => equations.value[index].root)
+    : [selectionOf(active()) ? selectedAtoms(active()) : active().root]
 
-  if (atoms.length > 0) {
-    await writeClipboard(exportRow(atoms, format, exportOptions.value))
+  if (rows.some((row) => row.length > 0)) {
+    await writeClipboard(exportRows(rows, format, exportOptions.value))
     copiedFormat.value = label
     window.clearTimeout(copiedTimer)
     copiedTimer = window.setTimeout(() => (copiedFormat.value = null), 1500)
@@ -1196,7 +1282,7 @@ function toggleCopyMenu(event: Event) {
               :label="copyAsLabel"
               size="small"
               text
-              title="Copy the selection, or the whole equation, as LaTeX, MathJSON or Content MathML"
+              title="Copy the selection, the whole equation, or the lines selected (Shift+click their numbers), as LaTeX, MathJSON or Content MathML"
               aria-haspopup="true"
               aria-controls="copy-as-menu"
               data-role="copy-as"
@@ -1280,6 +1366,7 @@ function toggleCopyMenu(event: Event) {
         <div
           ref="stackEl"
           class="equations-stack"
+          @mousedown="handleStackMousedown"
           @keydown="handleUnusedKey"
           @focusout="handleFocusOut"
         >
@@ -1288,12 +1375,17 @@ function toggleCopyMenu(event: Event) {
             :key="lineIds[index]"
             class="equation-row"
             :class="[
-              { active: index === activeIndex, dragging: index === dragFrom },
+              {
+                active: index === activeIndex,
+                dragging: index === dragFrom,
+                'line-selected': isLineSelected(index),
+              },
               rowProblemClass(index),
               dropClass(index),
             ]"
             :data-line="index"
             :data-line-id="lineIds[index]"
+            :data-selected="isLineSelected(index) || undefined"
             @focusin="handleLineFocus(index)"
             @dragover="handleDragOver(index, $event)"
             @drop="handleDrop"
@@ -1304,7 +1396,8 @@ function toggleCopyMenu(event: Event) {
               class="equation-label"
               data-role="line-handle"
               :draggable="canReorder ? 'true' : undefined"
-              :title="canReorder ? `Drag to reorder (${altKey}+↑/↓)` : undefined"
+              :title="labelTitle"
+              @mousedown="handleLabelMousedown(index, $event)"
               @dragstart="handleDragStart(index, $event)"
               @dragend="clearDrag"
             >
@@ -1380,7 +1473,12 @@ function toggleCopyMenu(event: Event) {
             of a fraction, exponent or bracket · <kbd>Enter</kbd> new line (in a piecewise: new
             piece; <kbd>Backspace</kbd> in an empty piece removes it; <code>\otherwise</code> adds
             one) · <kbd>{{ altKey }}</kbd
-            >+<kbd>↑</kbd><kbd>↓</kbd> move the line up/down, or drag it by its number
+            >+<kbd>↑</kbd><kbd>↓</kbd> move the line up/down, or drag it by its number<template
+              v-if="outputs"
+            >
+              · <kbd>Shift</kbd>+click or <kbd>{{ modKey }}</kbd
+              >+click line numbers to select lines for "Copy as"</template
+            >
           </p>
           <p class="key-hint">
             Select with <kbd>Shift</kbd>+<kbd>←</kbd><kbd>→</kbd>, <kbd>Shift</kbd>+<kbd>Home</kbd
@@ -1748,6 +1846,16 @@ function toggleCopyMenu(event: Event) {
 
 .line-problem.pi-exclamation-triangle {
   color: var(--me-warn);
+}
+
+/* A line selected (for "Copy as"): tinted, its number more so. */
+.equation-row.line-selected {
+  background: color-mix(in srgb, var(--me-accent) 6%, var(--me-surface));
+}
+
+.equation-row.line-selected .equation-label {
+  background: color-mix(in srgb, var(--me-accent) 16%, var(--me-surface));
+  color: var(--me-accent);
 }
 
 /* A line being dragged, and where it would land: a line in the gap. */
