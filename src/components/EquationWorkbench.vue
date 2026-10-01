@@ -1853,9 +1853,13 @@ function toggleCopyMenu(event: Event) {
   align-self: flex-start;
 }
 
+/* One grid, its rows sharing its columns (subgrid): the previews' column is
+   as wide as the widest (an inverse trig function, "otherwise"), so none runs
+   into its name, and the names line up. */
 .command-options {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(2.4rem, max-content) max-content minmax(0, 1fr);
+  column-gap: 0.5rem;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -1863,9 +1867,9 @@ function toggleCopyMenu(event: Event) {
 
 .command-option {
   display: grid;
-  grid-template-columns: 2.4rem auto 1fr;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
   align-items: center;
-  gap: 0.5rem;
   min-height: 1.9rem;
   padding: 0.1rem 0.4rem;
   border-radius: 0.35rem;
@@ -1886,6 +1890,7 @@ function toggleCopyMenu(event: Event) {
 }
 
 .command-name {
+  white-space: nowrap;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
 }
 
