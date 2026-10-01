@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test'
 import { Workbench } from './workbench'
 
 // What an application embedding the workbench uses: setMathML (lines set from
-// outside, as a new document), and the outputs and history props.
+// outside, as a new document), and the outputs, copy and history props.
 
 let wb: Workbench
 
@@ -143,6 +143,42 @@ test('outputs off: no output panels and no "Copy as"', async ({ page }) => {
   await wb.focusLine(0)
   await wb.type('x=1')
   await expect.poll(lineVariables).toEqual([['x']])
+})
+
+test.describe('copy', () => {
+  const handle = (line: number) =>
+    wb.page.locator(`[data-line="${line}"] [data-role="line-handle"]`)
+  const selected = () => wb.page.locator('[data-line][data-selected]')
+
+  async function typeTwoLines() {
+    await wb.focusLine(0)
+    await wb.type('y=2x')
+    await wb.press('Enter')
+    await wb.type('z=y')
+    await wb.focusLine(0)
+  }
+
+  test('outputs off, copy on: "Copy as" and line selection, without the output panels', async ({
+    page,
+  }) => {
+    wb = new Workbench(page)
+    await wb.goto('/?nooutputs&copy')
+    await expect(page.locator('[data-role="outputs"]')).toHaveCount(0)
+    await typeTwoLines()
+    await handle(1).click({ modifiers: ['Shift'] })
+    await expect(selected()).toHaveCount(2)
+    await expect(page.locator('[data-role="copy-as"]')).toContainText('Copy 2 lines as')
+  })
+
+  test('copy off: the output panels, without "Copy as" or line selection', async ({ page }) => {
+    wb = new Workbench(page)
+    await wb.goto('/?nocopy')
+    await expect(page.locator('[data-role="outputs"]')).toBeVisible()
+    await expect(page.locator('[data-role="copy-as"]')).toHaveCount(0)
+    await typeTwoLines()
+    await handle(1).click({ modifiers: ['Shift'] })
+    await expect(selected()).toHaveCount(0)
+  })
 })
 
 test('history off: no undo buttons, and Ctrl+Z is left to the host', async ({ page }) => {
