@@ -160,6 +160,32 @@ test.describe('commands', () => {
     await expect.poll(() => wb.mathJson()).toBeNull()
   })
 
+  test('every preview in the list fits its column', async () => {
+    const list = wb.page.locator('[data-role="command-list"]')
+    // Whether any option's preview is wider than its column, or runs into its
+    // name.
+    const overflowing = () =>
+      list.locator('[role="option"]').evaluateAll((options) =>
+        options.flatMap((option) => {
+          const preview = option.querySelector('.command-preview')!
+          const name = option.querySelector('.command-name')!
+          const content = preview.firstElementChild?.getBoundingClientRect()
+          const cell = preview.getBoundingClientRect()
+          const overlaps =
+            (content?.right ?? 0) > name.getBoundingClientRect().left ||
+            (content?.width ?? 0) > cell.width + 0.5
+          return overlaps ? [option.getAttribute('data-command')] : []
+        }),
+      )
+
+    for (const letter of 'abcdefghijklmnopqrstuvwxyz') {
+      await wb.type(`\\${letter}`)
+      await expect(list).toBeVisible()
+      expect(await overflowing(), `\\${letter}`).toEqual([])
+      await wb.press('Escape')
+    }
+  })
+
   test('Escape cancels a command', async () => {
     await wb.type('\\fr')
     await wb.press('Escape')
