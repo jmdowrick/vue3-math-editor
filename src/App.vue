@@ -20,13 +20,15 @@ import exampleUnits from './demo/example-units.cellml?raw'
 
 // Demo switches: ?cellml for CellML mode; ?nolibcellml to run without the
 // libCellML plugin (see main.ts), as an application without it would;
-// ?nooutputs, ?nohistory, ?validate=commit, ?readonly and ?autofocus as an
-// application embedding the editor might; ?scroll puts the editor in a
-// scrolling box, and ?dialog adds one in a dialog (Open dialog), for the
-// browser tests.
+// ?nooutputs, ?copy or ?nocopy, ?nohistory, ?validate=commit, ?readonly and
+// ?autofocus as an application embedding the editor might; ?scroll puts the
+// editor in a scrolling box, and ?dialog adds one in a dialog (Open dialog),
+// for the browser tests.
 const query = new URLSearchParams(window.location.search)
 const cellml = query.has('cellml')
 const outputs = !query.has('nooutputs')
+// Unset follows the outputs.
+const copy = query.has('copy') ? true : query.has('nocopy') ? false : undefined
 const history = !query.has('nohistory')
 const validate = query.get('validate') === 'commit' ? 'commit' : 'input'
 const readonly = query.has('readonly')
@@ -167,6 +169,7 @@ Object.assign(window, {
         debug
         :cellml="cellml"
         :outputs="outputs"
+        :copy="copy"
         :history="history"
         :validate="validate"
         :readonly="readonly"

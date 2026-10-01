@@ -21,8 +21,9 @@
 // - `issues` prop: units issues to underline, by line id and variable names.
 // - `variableUnits` prop: each variable's units, shown on hover; with it,
 //   numbers show their units on hover too.
-// - `outputs` prop: the output panels and "Copy as" (on by default), which
-//   copies the selection, the active line, or the lines selected by
+// - `outputs` prop: the output panels (on by default).
+// - `copy` prop: "Copy as" (by default, on when the outputs are), which copies
+//   the selection, the active line, or the lines selected by
 //   Shift/Ctrl/Cmd+clicking their numbers.
 // - `history` prop: the workbench's own undo/redo (on by default); off, a host
 //   with its own undo history gets Ctrl/Cmd+Z and Y.
@@ -99,8 +100,11 @@ const props = withDefaults(
     // with Kr below and max above (editor/nameScripts.ts); off, as typed.
     // Either way the names are the same.
     typesetNames?: boolean
-    // The Content MathML, MathJSON, LaTeX and AST panels, and "Copy as".
+    // The Content MathML, MathJSON, LaTeX and AST panels.
     outputs?: boolean
+    // "Copy as", and selecting lines to copy by Shift/Ctrl/Cmd+clicking their
+    // numbers. By default, on when the outputs are.
+    copy?: boolean
     // The workbench's own undo/redo: off, nothing is recorded, the buttons are
     // hidden and Ctrl/Cmd+Z and Y are left to the host.
     history?: boolean
@@ -123,6 +127,8 @@ const props = withDefaults(
     greekNames: true,
     typesetNames: true,
     outputs: true,
+    // Undefined, not false, so it can follow `outputs`.
+    copy: undefined,
     history: true,
     validate: 'input',
     readonly: false,
@@ -594,12 +600,15 @@ function clearLineSelection() {
   if (selectedLineIds.value.size) selectedLineIds.value = new Set()
 }
 
+// "Copy as" and line selection.
+const canCopy = computed(() => props.copy ?? props.outputs)
+
 const selectsLines = (event: MouseEvent) => event.shiftKey || event.metaKey || event.ctrlKey
 
 // A Shift/Ctrl/Cmd press on a line's number. A plain press is left to drag
 // the line by.
 function handleLabelMousedown(index: number, event: MouseEvent) {
-  if (!props.outputs || !selectsLines(event)) return
+  if (!canCopy.value || !selectsLines(event)) return
   // Focus stays in the active line, and no drag starts.
   event.preventDefault()
   const ids = lineIds.value
@@ -627,7 +636,7 @@ function handleStackMousedown(event: MouseEvent) {
 const labelTitle = computed(() => {
   const parts = [
     canReorder.value && `Drag to reorder (${altKey}+↑/↓)`,
-    props.outputs && `Shift+click or ${modKey}+click to select lines to copy`,
+    canCopy.value && `Shift+click or ${modKey}+click to select lines to copy`,
   ]
   return parts.filter(Boolean).join(' · ') || undefined
 })
@@ -1276,7 +1285,7 @@ function toggleCopyMenu(event: Event) {
             />
           </div>
 
-          <div v-if="outputs" class="toolbar-group toolbar-copy">
+          <div v-if="canCopy" class="toolbar-group toolbar-copy">
             <Button
               icon="pi pi-copy"
               :label="copyAsLabel"
@@ -1474,7 +1483,7 @@ function toggleCopyMenu(event: Event) {
             piece; <kbd>Backspace</kbd> in an empty piece removes it; <code>\otherwise</code> adds
             one) · <kbd>{{ altKey }}</kbd
             >+<kbd>↑</kbd><kbd>↓</kbd> move the line up/down, or drag it by its number<template
-              v-if="outputs"
+              v-if="canCopy"
             >
               · <kbd>Shift</kbd>+click or <kbd>{{ modKey }}</kbd
               >+click line numbers to select lines for "Copy as"</template
