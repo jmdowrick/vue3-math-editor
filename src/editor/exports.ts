@@ -1,9 +1,14 @@
-// "Copy as": an equation, or the selected part of one, in a chosen format.
+// "Copy as": an equation, the selected part of one, or several equations, in
+// a chosen format.
 //
 // The selection is exported on its own: its atoms are parsed as a row of
 // their own, so selecting "a+b" in "y=a+b" gives the MathJSON for a+b. A
 // selection that isn't a complete expression (e.g. "+b") gets placeholders
 // for what's missing, as in the output panels.
+//
+// Several equations (lines) make one document: Content MathML, one <math>
+// with an equation each (as CellML has them, and as pasting reads them back);
+// MathJSON, an array; LaTeX, an aligned block, aligned at each equals sign.
 //
 // CellML mode (`{ cellml: true }`) makes the Content MathML ready for a CellML
 // model: the root <math> declares the CellML namespace, and every number
@@ -12,7 +17,7 @@
 import { type LatexOptions, rowToLatexSource } from './clipboard'
 import type { Row } from './layout'
 import { parseRow } from './parse'
-import { renderMathJson } from '../renderers/mathjson'
+import { astToMathJson, renderMathJson } from '../renderers/mathjson'
 import { type ContentMathMLOptions, astToContentMathML } from '../renderers/mathml'
 
 export type ExportFormat = 'latex' | 'mathjson' | 'mathml'
@@ -39,9 +44,45 @@ export function exportRow(row: Row, format: ExportFormat, options: ExportOptions
   }
 }
 
+// Several rows, one document (one row: as exportRow). Empty rows are left out.
+export function exportRows(
+  rows: readonly Row[],
+  format: ExportFormat,
+  options: ExportOptions = {},
+): string {
+  const filled = rows.filter((row) => row.length > 0)
+  if (filled.length === 1) return exportRow(filled[0], format, options)
+  switch (format) {
+    case 'latex':
+      return `\\begin{aligned}\n${filled.map((row) => alignedLatex(row, options)).join(' \\\\\n')}\n\\end{aligned}`
+    case 'mathjson':
+      return JSON.stringify(
+        filled.map((row) => astToMathJson(parseRow(row).ast)),
+        null,
+        2,
+      )
+    case 'mathml':
+      return contentMathMLDocument(filled, options)
+  }
+}
+
+// A line of an aligned block: aligned at its equals sign (one written in the
+// row itself, not inside a structure), else at its start.
+function alignedLatex(row: Row, options: ExportOptions): string {
+  const equals = row.findIndex((atom) => atom.kind === 'symbol' && atom.value === '=')
+  if (equals < 0) return `&${rowToLatexSource(row, options)}`
+  const left = rowToLatexSource(row.slice(0, equals), options)
+  return `${left} &= ${rowToLatexSource(row.slice(equals + 1), options)}`
+}
+
 // A complete, indented Content MathML document for a row.
 export function contentMathML(row: Row, options: ExportOptions = {}): string {
-  const body = astToContentMathML(parseRow(row).ast, options)
+  return contentMathMLDocument([row], options)
+}
+
+// One <math> with each row's equation (or expression) in turn.
+function contentMathMLDocument(rows: readonly Row[], options: ExportOptions): string {
+  const body = rows.map((row) => astToContentMathML(parseRow(row).ast, options)).join('')
   const namespaces = options.cellml
     ? `xmlns="${MATHML_NAMESPACE}" xmlns:cellml="${CELLML_NAMESPACE}"`
     : `xmlns="${MATHML_NAMESPACE}"`

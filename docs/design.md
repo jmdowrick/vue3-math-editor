@@ -491,6 +491,12 @@ is exported on its own: its atoms are parsed as a row of their own, so selecting
 `y=a+b` gives `["Add","a","b"]`, and an incomplete selection (`+b`) gets placeholders. The
 output panels show the same text for the whole active equation.
 
+Lines selected by Shift/Ctrl/Cmd+clicking their numbers are copied together, by
+`exportRows`, as one document: Content MathML, one `<math>` with each line's equation in
+turn (as CellML has them, and as `importContentMathML` reads them back); MathJSON, an
+array; LaTeX, an `aligned` block with `&` before each line's top-level `=` (at its start
+if it has none). Empty lines are left out, and one line is exported as `exportRow` has it.
+
 - **LaTeX** is `rowToLatexSource`, the same as Ctrl+C, which pastes back into the editor.
 - **MathJSON** is the indented JSON of `astToMathJson`.
 - **Content MathML** is a complete document: the renderer's output wrapped in

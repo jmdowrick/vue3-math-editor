@@ -522,6 +522,12 @@ With a selection:
 - **Copy as** in the toolbar copies the selection, or the whole equation, as **LaTeX**,
   **MathJSON** or **Content MathML**. A selection is exported on its own, so selecting
   `a+b` in `y=a+b` gives just `a+b`.
+- To copy several lines, select them by their numbers: **Shift+click** a line's number
+  selects the lines from the one you're on to it, and **Ctrl/Cmd+click** adds or removes
+  one. Copy as then gives one document: Content MathML is one `<math>` with an equation
+  each (as in a CellML model, and pasting it back gives the same lines), MathJSON is an
+  array, and LaTeX is an `aligned` block, lined up at each equals sign. Esc, typing or a
+  click into a line clears the selection.
 - In **CellML mode** (set by the application using the editor), Content MathML is
   ready for a CellML 2.0 model: it declares the CellML namespace, and every number gets
   `cellml:units`: the units you gave it (`0.25{mV}`), or `dimensionless`.
