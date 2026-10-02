@@ -36,9 +36,11 @@
 //   line's problems once it is committed.
 // - `readonly`, `autofocus` and `debug` (the cursor readout) props.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, toRaw, watch } from 'vue'
+import { ZIndex } from '@primeuix/utils/zindex'
 import katex from 'katex'
 import Button from 'primevue/button'
 import Card from 'primevue/card'
+import { usePrimeVue } from 'primevue/config'
 import Menu from 'primevue/menu'
 import Popover from 'primevue/popover'
 import Tab from 'primevue/tab'
@@ -775,6 +777,18 @@ function moveHighlight(step: number) {
 // Under the caret, or over it near the bottom of the window. Teleported to
 // the body, so nothing around the workbench clips it or moves it.
 const commandListStyle = ref<Record<string, string>>({})
+const commandListEl = ref<HTMLElement | null>(null)
+
+// Stacked the way PrimeVue stacks its overlays, so it is over whatever dialog
+// the workbench is in, however high PrimeVue has put that.
+const primevue = usePrimeVue()
+watch(commandListEl, (el, previous) => {
+  if (previous) ZIndex.clear(previous)
+  if (el) ZIndex.set('overlay', el, primevue.config.zIndex?.overlay)
+})
+onBeforeUnmount(() => {
+  if (commandListEl.value) ZIndex.clear(commandListEl.value)
+})
 function placeCommandList() {
   const caret = fieldRefs.value[activeIndex.value]?.caretRect()
   if (!caret) return
@@ -1428,6 +1442,7 @@ function toggleCopyMenu(event: Event) {
         <Teleport to="body">
           <div
             v-if="commandBuffer !== null"
+            ref="commandListEl"
             class="command-list"
             data-me-popover
             data-role="command-list"
@@ -2052,10 +2067,10 @@ function toggleCopyMenu(event: Event) {
   color: color-mix(in srgb, var(--me-accent) 45%, var(--me-text));
 }
 
-/* The command list: over everything, the host's dialogs included. */
+/* The command list: over everything, the host's dialogs included. Its
+   z-index is set by PrimeVue's ZIndex when it opens. */
 .command-list {
   position: fixed;
-  z-index: 1300;
   display: flex;
   flex-direction: column;
   gap: 0.35rem;

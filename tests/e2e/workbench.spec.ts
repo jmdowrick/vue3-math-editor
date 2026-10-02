@@ -129,6 +129,16 @@ test.describe('commands', () => {
     await wb.expectMathJson(['Divide', 1, 2])
   })
 
+  test('the command list is stacked by PrimeVue, over any dialog', async () => {
+    const list = wb.page.locator('[data-role="command-list"]')
+    await wb.type('\\')
+    // PrimeVue's overlay z-index starts at 1000; a fixed one would sit under a
+    // dialog opened while another overlay is up.
+    expect(Number(await list.evaluate((el) => el.style.zIndex))).toBeGreaterThan(1000)
+    await wb.press('Escape')
+    await expect(list).toHaveCount(0)
+  })
+
   test('↓ then Enter picks the next in the list', async () => {
     await wb.type('\\s')
     const options = wb.page.locator('[data-role="command-list"] [role="option"]')
