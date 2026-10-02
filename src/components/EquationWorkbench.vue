@@ -49,6 +49,7 @@ import Tabs from 'primevue/tabs'
 import Tag from 'primevue/tag'
 
 import MathField, { type Mark, type NavigationState } from './MathField.vue'
+import PasteReviewDialog from './PasteReviewDialog.vue'
 import { contentStable } from './contentStable'
 import {
   type Command,
@@ -80,6 +81,11 @@ import {
 import type { Row } from '../editor/layout'
 import { type MathMLImport, importContentMathML } from '../editor/mathmlImport'
 import { settleNames } from '../editor/names'
+import {
+  type PresentationPaste,
+  type PresentationReading,
+  readPresentation,
+} from '../editor/presentationImport'
 import { settleState } from '../editor/numberUnits'
 import { parseRow } from '../editor/parse'
 import { describeSelection, selectedAtoms, selectionOf } from '../editor/selection'
@@ -338,6 +344,96 @@ function handleImport(index: number, result: MathMLImport) {
       : count === 0
         ? (result.problems[0] ?? 'Nothing was imported.')
         : null
+}
+
+// Pasted equations from Word, or Presentation MathML (editor/
+// presentationImport.ts): read, and if that took an assumption the user can
+// change, or left something out, reviewed first (PasteReviewDialog.vue), by
+// the line's id, as the lines may change meanwhile. They go in as the user
+// typed them: one at the caret; several as new lines after the active one
+// (the first in it, if it is empty), keeping the lines there are. Either way
+// it is one undo step; what was left out stays with its line, as its
+// problem, until the line is edited; and the notice says how it was read.
+const pasteReview = shallowRef<{ lineId: string; paste: PresentationPaste } | null>(null)
+
+function handlePresentationPaste(index: number, paste: PresentationPaste) {
+  if (props.readonly) return
+  const reading = readPresentation(paste)
+  // Nothing to paste: only the notice, saying why.
+  const review = reading.assumptions.length > 0 || reading.omissions.length > 0
+  if (review && reading.equations.length > 0) {
+    pasteReview.value = { lineId: lineIds.value[index], paste }
+  } else {
+    insertPasted(index, reading)
+  }
+}
+
+// The review closed (after giving focus back): pasted, or cancelled (null).
+function handleReviewClosed(reading: PresentationReading | null) {
+  const review = pasteReview.value
+  pasteReview.value = null
+  if (!review || !reading || props.readonly) return
+  const index = lineIds.value.indexOf(review.lineId)
+  insertPasted(index >= 0 ? index : activeIndex.value, reading)
+}
+
+function insertPasted(index: number, reading: PresentationReading) {
+  const count = reading.equations.length
+  if (count === 1) {
+    handleEdit(index, insertAtoms(reading.equations[0])(equations.value[index]), OTHER_EDIT)
+    // After the edit, which clears both.
+    if (reading.lineProblems[0]?.length) {
+      importProblems.value.set(lineIds.value[index], reading.lineProblems[0])
+    }
+  } else if (count > 1) {
+    pushHistory(index)
+    insertLinesAfter(index, reading.equations, reading.lineProblems)
+    focusActive()
+  }
+
+  importNotice.value =
+    count === 0
+      ? (reading.problems[0] ?? 'Nothing was pasted.')
+      : [...(count > 1 ? [`Pasted ${count} equations as new lines.`] : []), ...reading.notes].join(
+          ' ',
+        ) || null
+}
+
+// Rows as new lines after line `index`, or from it if it is empty, each with
+// what couldn't be read for it. They count as committed, as if each were
+// typed and finished with; the last is the active line.
+function insertLinesAfter(
+  index: number,
+  roots: readonly Row[],
+  problems: readonly (readonly string[])[],
+) {
+  const states = roots.map((root) =>
+    settle({ root, cursor: cursorAtEnd(root), anchor: null }, true),
+  )
+  const reuse = equations.value[index].root.length === 0
+  if (!reuse) commitLine(index, 'navigate')
+  const start = reuse ? index : index + 1
+  const ids = states.map((_, i) => (reuse && i === 0 ? lineIds.value[index] : newLineId()))
+
+  equations.value = [
+    ...equations.value.slice(0, start),
+    ...states,
+    ...equations.value.slice(index + 1),
+  ]
+  lineIds.value = [...lineIds.value.slice(0, start), ...ids, ...lineIds.value.slice(index + 1)]
+  activeIndex.value = start + states.length - 1
+  clearLineSelection()
+
+  ids.forEach((id, i) => {
+    if (problems[i]?.length) importProblems.value.set(id, problems[i])
+    else importProblems.value.delete(id)
+  })
+  for (const id of ids) {
+    const line = lines.value.find((candidate) => candidate.id === id)
+    if (!line) continue
+    committed.value.set(id, line.mathml)
+    emit('line-commit', line, { reason: 'paste' })
+  }
 }
 
 // The host sets the lines (exposed): Content MathML with one or more <math>,
@@ -1291,7 +1387,7 @@ function toggleCopyMenu(event: Event) {
               :label="copyAsLabel"
               size="small"
               text
-              title="Copy the selection, the whole equation, or the lines selected (Shift+click their numbers), as LaTeX, MathJSON or Content MathML"
+              title="Copy the selection, the whole equation, or the lines selected (Shift+click their numbers), as LaTeX, MathJSON, Content MathML or a Word equation"
               aria-haspopup="true"
               aria-controls="copy-as-menu"
               data-role="copy-as"
@@ -1442,9 +1538,18 @@ function toggleCopyMenu(event: Event) {
               @navigate="handleNavigate(index, $event)"
               @edit="(state, info) => handleEdit(index, state, info)"
               @import="handleImport(index, $event)"
+              @paste-presentation="handlePresentationPaste(index, $event)"
             />
           </div>
         </div>
+
+        <PasteReviewDialog
+          v-if="pasteReview"
+          :paste="pasteReview.paste"
+          :greek-names="greekNames"
+          :typeset-names="typesetNames"
+          @closed="handleReviewClosed"
+        />
 
         <!-- The bar shows only when there is a problem or a notice. It is under
            the lines, so they don't move when it appears or goes. The live

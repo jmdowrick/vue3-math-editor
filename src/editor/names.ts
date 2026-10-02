@@ -14,10 +14,16 @@
 // While the cursor is in a name, or at its end, it is left alone, so it can be
 // typed and changed letter by letter. The name itself (what the equation
 // exports) is the same either way: alpha_m.
+//
+// Decorations (q_bar, Ca_2plus, Glc_conc, nameScripts.ts) are only drawn, so
+// settling leaves them alone. A pasted accent, bracket or charge becomes its
+// keyword through withNameKeyword, so that it is spelled the one way it is
+// drawn.
 
 import type { Cursor } from './cursor'
-import { GREEK_NAMES, isGreekAtom, nameRuns, reservedConstant } from './identifiers'
+import { GREEK_NAMES, isGreekAtom, isOneName, nameRuns, reservedConstant } from './identifiers'
 import { constantForSymbol } from './constants'
+import { keywordSlot, nameScripts } from './nameScripts'
 import { type Atom, type Row, type RowPath, childRows, row, setChildRow, symbol } from './layout'
 
 export interface NameOptions {
@@ -58,6 +64,39 @@ export function nameAtoms(name: string, options: NameOptions = {}): Row {
       ? [...separator, symbol(greek), ...row(word.slice(greek.length))]
       : [...separator, ...row(word)]
   })
+}
+
+// The one name `atoms` with "_" and `keyword` (bar, 2plus, conc) put in its
+// place in the decoration zone: after the base, and after any decoration of
+// an earlier slot (accent, then charge, then conc). q_i with bar is q_bar_i;
+// Ca_2plus with conc is Ca_2plus_conc. The name's own atoms are kept, ids and
+// all, with new ones for the keyword. Null if `atoms` isn't one name, the
+// name is drawn as typed (x_bar_), it already has a decoration in that slot
+// or a later one (decorations are applied inside out, so x_bar with hat, or
+// Glc_conc with 2plus, can't be written), or the keyword wouldn't be read as
+// a decoration there (sin_x, whose base spells a function).
+export function withNameKeyword(atoms: Row, keyword: string): Row | null {
+  const slot = keywordSlot(keyword)
+  if (slot === null || !isOneName(atoms)) return null
+
+  const values = atoms.map((atom) => (atom as Atom & { kind: 'symbol' }).value)
+  const scripts = values.includes('_') ? nameScripts(values) : null
+  if (values.includes('_') && !scripts) return null
+
+  // After the base, or the last decoration of an earlier slot.
+  const decorations = [scripts?.accent, scripts?.charge, scripts?.conc]
+  if (decorations.slice(slot).some(Boolean)) return null
+  const last = decorations.slice(0, slot).reverse().find(Boolean)
+  const at = last ? last.text[1] : (scripts?.base[1] ?? atoms.length)
+
+  const result = [...atoms.slice(0, at), symbol('_'), ...row(keyword), ...atoms.slice(at)]
+
+  // The keyword is read as that decoration, and the scripts are unchanged.
+  const read = nameScripts(result.map((atom) => (atom as Atom & { kind: 'symbol' }).value))
+  const decoration = read && [read.accent, read.charge, read.conc][slot]
+  if (!decoration || decoration.separator[0] !== at) return null
+  if (read.parts.length !== (scripts?.parts.length ?? 0)) return null
+  return result
 }
 
 const key = (path: RowPath) => path.map((s) => `${s.atom}.${s.branch}`).join('/')

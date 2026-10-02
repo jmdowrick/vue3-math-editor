@@ -8,7 +8,11 @@
 //
 // Several equations (lines) make one document: Content MathML, one <math>
 // with an equation each (as CellML has them, and as pasting reads them back);
-// MathJSON, an array; LaTeX, an aligned block, aligned at each equals sign.
+// MathJSON, an array; LaTeX, an aligned block, aligned at each equals sign;
+// a Word equation, one <math> with a line each.
+//
+// A Word equation is Presentation MathML (renderers/presentationMathml.ts),
+// which Word turns into one of its equations when it is pasted as text.
 //
 // CellML mode (`{ cellml: true }`) makes the Content MathML ready for a CellML
 // model: the root <math> declares the CellML namespace, and every number
@@ -19,13 +23,15 @@ import type { Row } from './layout'
 import { parseRow } from './parse'
 import { astToMathJson, renderMathJson } from '../renderers/mathjson'
 import { type ContentMathMLOptions, astToContentMathML } from '../renderers/mathml'
+import { presentationMathMLDocument } from '../renderers/presentationMathml'
 
-export type ExportFormat = 'latex' | 'mathjson' | 'mathml'
+export type ExportFormat = 'latex' | 'mathjson' | 'mathml' | 'word'
 
 export const EXPORT_FORMATS: ReadonlyArray<{ format: ExportFormat; label: string }> = [
   { format: 'latex', label: 'LaTeX' },
   { format: 'mathjson', label: 'MathJSON' },
   { format: 'mathml', label: 'Content MathML' },
+  { format: 'word', label: 'Word equation' },
 ]
 
 const MATHML_NAMESPACE = 'http://www.w3.org/1998/Math/MathML'
@@ -41,6 +47,8 @@ export function exportRow(row: Row, format: ExportFormat, options: ExportOptions
       return renderMathJson(parseRow(row).ast)
     case 'mathml':
       return contentMathML(row, options)
+    case 'word':
+      return presentationMathMLDocument([row])
   }
 }
 
@@ -63,6 +71,8 @@ export function exportRows(
       )
     case 'mathml':
       return contentMathMLDocument(filled, options)
+    case 'word':
+      return presentationMathMLDocument(filled)
   }
 }
 

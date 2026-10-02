@@ -15,7 +15,13 @@ import type { Cursor } from '../editor/cursor'
 import { rowPathsEqual } from '../editor/layout'
 import { GREEK_NAMES, type NameRun, nameRuns, numberRuns } from '../editor/identifiers'
 import { cursorInName } from '../editor/names'
-import { type NameScripts, type Range, nameScripts } from '../editor/nameScripts'
+import {
+  NAME_ACCENTS,
+  type NameDecoration,
+  type NameScripts,
+  type Range,
+  nameScripts,
+} from '../editor/nameScripts'
 import { constantForSymbol } from '../editor/constants'
 import { CONDITION_OPERATORS } from '../editor/operators'
 import { delimiterLatex, getFunctionDefinition } from '../registry/nodes'
@@ -137,26 +143,86 @@ function wordGlyphs(letters: SymbolAtom[], options: LayoutLatexOptions): string 
   return letters.map((l) => tag(l.id, nameGlyph(l.value, options))).join('')
 }
 
-// A name with its scripts typeset: {base}_{sub,sub}^{sup}. Every atom is still
-// tagged for the caret; the underscores are drawn as nothing, or as the comma
-// before a second part.
+// A charge's atoms in a superscript: the underscore drawn as nothing, the
+// count's digits as themselves, and plus or minus as the sign on its first
+// letter, the rest drawn as nothing. The sign is braced, which makes it an
+// ordinary atom with no operator spacing: Ca_2plus is Ca²⁺.
+function chargeGlyphs(separator: SymbolAtom[], text: SymbolAtom[], sign: '+' | '-'): string {
+  const word = text.findIndex((l) => !/^[0-9]$/.test(l.value))
+  return [
+    ...separator.map((l) => tag(l.id, '')),
+    ...text.map((l, i) => tag(l.id, i < word ? l.value : i === word ? `{${sign}}` : '')),
+  ].join('')
+}
+
+// A name with its decorations and scripts typeset: {base}_{sub,sub}^{sup},
+// with the accent over the base, a charge first in the superscript and a
+// concentration in square brackets ([Ca²⁺] with i below). Every atom is still
+// tagged for the caret; the underscores and keywords are drawn as nothing,
+// or as the comma before a second part, or the sign of a charge.
+//
+// The whole name is wrapped in \htmlData{name=<first atom id>}, so that
+// caretGeometry.ts can find its right edge when its last atoms paint nothing
+// (x_tilde, Ca_2plus).
 function typesetName(letters: SymbolAtom[], scripts: NameScripts, options: LayoutLatexOptions) {
   const slice = ([start, end]: Range) => letters.slice(start, end)
-  const scriptLatex = (role: 'sub' | 'sup') =>
+  const empties = (decoration: NameDecoration | undefined) =>
+    decoration
+      ? [...slice(decoration.separator), ...slice(decoration.text)]
+          .map((l) => tag(l.id, ''))
+          .join('')
+      : ''
+  // `first` is the number of items already in the script: 1 when a charge
+  // comes first in the superscript, so its first part gets the comma.
+  const scriptLatex = (role: 'sub' | 'sup', first = 0) =>
     scripts.parts
       .filter((part) => part.role === role)
       .map((part, index) => {
         const separator = slice(part.separator)
         const marks = separator.map((l, i) =>
-          tag(l.id, index > 0 && i === separator.length - 1 ? ',' : ''),
+          tag(l.id, index + first > 0 && i === separator.length - 1 ? ',' : ''),
         )
         return marks.join('') + wordGlyphs(slice(part.text), options)
       })
       .join('')
 
+  // The base. One atom carries the accent inside its own tag, which keeps
+  // KaTeX's skew for an italic letter (\bar{q}). A longer base gets the wide
+  // accent round its tags (\overline, \widehat, …), and so does a Greek
+  // letter spelled out with greekNames off.
+  const base = slice(scripts.base)
+  let core = wordGlyphs(base, options)
+  if (scripts.accent) {
+    const accent = NAME_ACCENTS[scripts.accent.kind]
+    const [only] = base
+    if (base.length === 1) {
+      const letter = /^[A-Za-z]$/.test(only.value)
+      const glyph = letter ? only.value : nameGlyph(only.value, options)
+      const wide = !letter && glyph.startsWith('\\mathit')
+      core = tag(only.id, `\\${wide ? accent.wide : accent.latex}{${glyph}}`)
+    } else {
+      core = `\\${accent.wide}{${core}}`
+    }
+  }
+  // The keyword's atoms go inside the base's braces, so the scripts attach
+  // to the decorated base and not to an empty box after it.
+  core = `{${core}${empties(scripts.accent)}}`
+
+  // A concentration's brackets carry no tag, like the units flag. Its charge
+  // is inside them and its scripts outside.
+  const { charge, conc } = scripts
+  const chargeLatex = charge
+    ? chargeGlyphs(slice(charge.separator), slice(charge.text), charge.sign)
+    : ''
+  if (conc) {
+    core = `\\left[{${core}${chargeLatex ? `^{${chargeLatex}}` : ''}${empties(conc)}}\\right]`
+  }
+
+  const outerCharge = conc ? '' : chargeLatex
   const sub = scriptLatex('sub')
-  const sup = scriptLatex('sup')
-  return `{{${wordGlyphs(slice(scripts.base), options)}}${sub ? `_{${sub}}` : ''}${sup ? `^{${sup}}` : ''}}`
+  const sup = outerCharge + scriptLatex('sup', outerCharge ? 1 : 0)
+  const body = `{${core}${sub ? `_{${sub}}` : ''}${sup ? `^{${sup}}` : ''}}`
+  return `\\htmlData{name=${letters[0].id}}{${body}}`
 }
 
 // The scripts to typeset a name with, or null to draw it as typed.

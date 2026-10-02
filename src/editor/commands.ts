@@ -43,8 +43,10 @@ import {
   GREEK_NAMES,
   bracketFunctionBefore,
   functionForSpelling,
+  nameRuns,
   numberRuns,
 } from './identifiers'
+import { withNameKeyword } from './names'
 import { continuesNumber, followsNumber, inUnits, isUnits } from './numberUnits'
 import { CONSTANTS, constantForCommand } from './constants'
 import {
@@ -854,6 +856,35 @@ export const insertDerivative: Command = wrapSelection(
   'expr',
 )
 
+// A keyword part (bar, hat, 2plus, conc; see nameScripts.ts) put in its
+// place in the name the caret is in or at the end of, or in the selection if
+// that is exactly one name: q with bar is q_bar, x_i with bar is x_bar_i.
+// The caret goes after the name, which is drawn decorated once the caret
+// leaves it, as a Greek name is. Nothing happens (the same state) when there
+// is no name there, or it can't take the keyword (Glc_conc with 2plus, a
+// function's name, a name drawn as typed).
+export function decorateName(keyword: string): Command {
+  return (state) => {
+    const selection = selectionOf(state)
+    const path = selection ? selection.path : state.cursor.path
+    const atoms = requireRow(state.root, path)
+    const { offset } = state.cursor
+    const run = nameRuns(atoms).find((run) =>
+      selection
+        ? run.start === selection.start && run.end === selection.end
+        : run.start < offset && offset <= run.end,
+    )
+    if (!run) return state
+
+    const decorated = withNameKeyword(atoms.slice(run.start, run.end), keyword)
+    if (!decorated) return state
+    return splice(state, path, run.start, run.end - run.start, decorated, {
+      path,
+      offset: run.start + decorated.length,
+    })
+  }
+}
+
 // The structures a "\name" makes, by name (the first is the usual one), and
 // how the command list shows them.
 interface StructureCommand {
@@ -904,6 +935,27 @@ const STRUCTURE_COMMANDS: readonly StructureCommand[] = [
     title: 'Ceiling',
     latex: '\\lceil x\\rceil',
     command: insertCeiling,
+  },
+  // Decorations of the name before the caret. Charges are toolbar buttons
+  // only (toolbar.ts), not commands.
+  ...(
+    [
+      ['bar', 'Bar', '\\bar{x}'],
+      ['hat', 'Hat', '\\hat{x}'],
+      ['tilde', 'Tilde', '\\tilde{x}'],
+      ['check', 'Check', '\\check{x}'],
+    ] as const
+  ).map(([name, title, latex]) => ({
+    names: [name],
+    title: `${title} over the name before the caret`,
+    latex,
+    command: decorateName(name),
+  })),
+  {
+    names: ['conc'],
+    title: 'Concentration of the name before the caret',
+    latex: '[x]',
+    command: decorateName('conc'),
   },
 ]
 
