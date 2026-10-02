@@ -21,6 +21,7 @@ import {
   superscript,
   symbol,
 } from '../src/editor/layout'
+import { parseRow } from '../src/editor/parse'
 import { selectedAtoms } from '../src/editor/selection'
 import { json, press, show, type } from './editorHelpers'
 
@@ -178,6 +179,195 @@ describe('names', () => {
     expect(json1('Vm_init + 2Vm')).toEqual(['Add', 'Vm_init', ['Multiply', 2, 'Vm']])
     expect(json1('cost')).toEqual('cost')
     expect(json1('sin(x)')).toEqual(['Sin', 'x'])
+  })
+})
+
+describe('decorated names', () => {
+  const typed = (keys: string) => type(keys).root
+
+  // The example names (nameScripts.ts), and how each is copied.
+  const copies: Array<[string, string]> = [
+    ['q_bar_i__Glc', '{\\bar{q}_{i}^{\\mathit{Glc}}}'],
+    ['kappa_hat_m__GLUT2', '{\\hat{\\kappa}_{m}^{\\mathit{GLUT2}}}'],
+    ['x_tilde', '\\tilde{x}'],
+    ['x_check', '\\check{x}'],
+    ['Glc_bar', '\\overline{\\mathit{Glc}}'],
+    ['Glc_check', '\\check{\\mathit{Glc}}'],
+    ['Glc_conc_i', '[\\mathit{Glc}]_{i}'],
+    ['Ca_2plus', '{\\mathit{Ca}^{2+}}'],
+    ['Na_plus', '{\\mathit{Na}^{+}}'],
+    ['Cl_minus', '{\\mathit{Cl}^{-}}'],
+    ['Ca_2plus_conc_i', '[\\mathit{Ca}^{2+}]_{i}'],
+    ['Ca_2plus__max', '{\\mathit{Ca}^{2+,\\mathit{max}}}'],
+    ['kappa_m__1', '{\\kappa_{m}^{\\mathrm{1}}}'],
+    ['x_a__12', '{x_{a}^{\\mathrm{12}}}'],
+    ['g_Na_bar', 'g_{\\mathit{Na},\\mathit{bar}}'],
+    ['x_i_bar', 'x_{i,\\mathit{bar}}'],
+    ['x_hat_bar', '\\hat{x}_{\\mathit{bar}}'],
+    ['Ca_conc_2plus', '[\\mathit{Ca}]_{\\mathit{2plus}}'],
+    ['x__bar', '{x^{\\mathit{bar}}}'],
+    ['sin_bar', '\\mathit{sin}_{\\mathit{bar}}'],
+  ]
+
+  it('are copied as they are drawn', () => {
+    for (const [keys, latex] of copies) expect(rowToLatexSource(typed(keys)), keys).toBe(latex)
+    // With Greek names off, a wide accent over the spelled-out letter.
+    expect(rowToLatexSource(typed('kappa_hat'), { greekNames: false })).toBe(
+      '\\widehat{\\mathit{kappa}}',
+    )
+    // Braced whenever there is a superscript, so a power stays a power of
+    // the name.
+    expect(rowToLatexSource(typed('Ca_2plus^2'))).toBe('{\\mathit{Ca}^{2+}}^{2}')
+    expect(rowToLatexSource(typed('Ca_2plus_conc^2'))).toBe('[\\mathit{Ca}^{2+}]^{2}')
+    // Off, as typed.
+    expect(rowToLatexSource(typed('q_bar_i__Glc'), { typesetNames: false })).toBe(
+      '\\mathit{q\\_bar\\_i\\_\\_Glc}',
+    )
+  })
+
+  it('round-trip through LaTeX', () => {
+    const names = [
+      ...copies.map(([keys]) => keys),
+      'Ca_2plus^2',
+      'y=q_bar_i__Glc*Glc_conc_o',
+      // A keyword as a part after a charge: the charge is read first.
+      'x_plus_bar',
+      'Ca_2plus_bar',
+      'x_plus_minus',
+      'x_plus_plus',
+      'x_2plus_minus',
+      'x_bar_plus_i',
+      'x__1__2',
+      'x_bar__1__2',
+    ]
+    for (const keys of names) {
+      const tree = typed(keys)
+      for (const options of [{}, { greekNames: false }, { typesetNames: false }]) {
+        const latex = rowToLatexSource(tree, options)
+        expect(text(latexToRow(latex)), `${keys} ${latex}`).toBe(text(tree))
+      }
+    }
+  })
+
+  it('are read from LaTeX and plain text from elsewhere', () => {
+    expect(pasted('\\bar{q}_i')).toBe('q_bar_i')
+    expect(pasted('\\bar q_i')).toBe('q_bar_i')
+    expect(pasted('\\overline{Glc}')).toBe('Glc_bar')
+    expect(pasted('\\hat{\\kappa}_m')).toBe('kappa_hat_m')
+    expect(pasted('\\widetilde{x}+\\check{y}')).toBe('x_tilde+y_check')
+    expect(pasted('[Glc]_i')).toBe('Glc_conc_i')
+    expect(pasted('\\left[Glc\\right]_i')).toBe('Glc_conc_i')
+    expect(pasted('\\lbrack Glc\\rbrack')).toBe('Glc_conc')
+    expect(pasted('Ca^{2+}')).toBe('Ca_2plus')
+    expect(pasted('Ca^2+')).toBe('Ca_2plus')
+    expect(pasted('Ca^2+_i')).toBe('Ca_2plus_i')
+    // A charge in the same scripts as a subscript goes before it.
+    expect(pasted('x_{bar}^{+}')).toBe('x_plus_bar')
+    expect(pasted('Ca_i^{2+}')).toBe('Ca_2plus_i')
+    expect(pasted('x_{bar}')).toBe('x_bar')
+    expect(pasted('Cl^-')).toBe('Cl_minus')
+    expect(pasted('Cl^{−}+Na^+')).toBe('Cl_minus+Na_plus')
+    expect(pasted('[Ca^{2+}]_i')).toBe('Ca_2plus_conc_i')
+    expect(pasted('[Ca^2+]_i')).toBe('Ca_2plus_conc_i')
+    expect(pasted('{Ca^{2+,max}}')).toBe('Ca_2plus__max')
+    expect(pasted('{\\kappa_{m}^{\\mathrm{1}}}')).toBe('kappa_m__1')
+    // Plain Unicode: a combining mark, or a letter with its accent.
+    expect(pasted('q̄_i')).toBe('q_bar_i')
+    expect(pasted('x̂')).toBe('x_hat')
+    expect(pasted('ā')).toBe('a_bar')
+  })
+
+  it('end where a decoration ends the name', () => {
+    expect(pasted('\\bar{x}y')).toBe('x_bar·y')
+    expect(pasted('x\\bar{y}')).toBe('x·y_bar')
+    expect(pasted('[Glc]_i x')).toBe('Glc_conc_i·x')
+    expect(pasted('[Glc]2')).toBe('Glc_conc·2')
+    expect(pasted('{g_{Kr}^{max}}x')).toBe('g_Kr__max·x')
+  })
+
+  it('pasted otherwise keep their powers and brackets', () => {
+    expect(pasted('x^{-1}')).toBe('x^{-1}')
+    expect(pasted('x^-1')).toBe('x^{-}1')
+    expect(pasted('x^2+1')).toBe('x^{2}+1')
+    expect(pasted('{x^{2}}')).toBe('x^{2}')
+    expect(pasted('x_1^{+2}')).toBe('x_1^{+2}')
+    expect(pasted('[x+y]')).toBe('(x+y)')
+    expect(pasted('[2]')).toBe('(2)')
+    expect(pasted('\\sin^{+}')).toBe('sin^{+}')
+    // An accent over anything but one name is dropped, as is a combining
+    // mark with nothing to go on.
+    expect(pasted('\\bar{x+y}')).toBe('x+y')
+    expect(pasted('\\hat{\\sin}x')).toBe('sinx')
+    expect(pasted('2̄+x_ī')).toBe('2+x_i')
+    // \mathrm{12} on its own is the number's digits.
+    expect(pasted('\\mathrm{12}')).toBe('12')
+  })
+})
+
+describe('pasting a period', () => {
+  const json1 = (source: string) =>
+    json({ root: latexToRow(source), cursor: { path: [], offset: 0 } })
+
+  it('reads it as multiplication, a decimal point or a full stop', () => {
+    const table: Array<[string, string]> = [
+      ['x.y', 'x·y'],
+      ['1.5', '1.5'],
+      ['.5', '.5'],
+      ['x+.5', 'x+.5'],
+      ['(.5)', '(.5)'],
+      ['x.5', 'x·5'],
+      ['2.x', '2·x'],
+      ['3 . 2', '3·2'],
+      ['1. 5', '1·5'],
+      ['3 .2', '3·2'],
+      ['x\\,.\\,y', 'x·y'],
+      ['1.2.3', '1.2·3'],
+      ['x^2.y', 'x^{2}·y'],
+      ['x^2.5', 'x^{2.5}'],
+      ['x^2 .5', 'x^{2}·5'],
+      ['k_1.5', 'k_1·5'],
+      ['k_1.[Glc]_o', 'k_1·Glc_conc_o'],
+      ['[Glc]_i.[Glc]_o', 'Glc_conc_i·Glc_conc_o'],
+      ['\\kappa.(x+1)', 'kappa·(x+1)'],
+      ['y=x.', 'y=x'],
+      ['y=x.}', 'y=x'],
+      ['(x.)', '(x)'],
+      ['x.=y', 'x=y'],
+      ['x.+y', 'x+y'],
+      ['x.\\cdot y', 'x·y'],
+      ['x.\\leq y', 'x≤y'],
+      ['1.e-3', '1.e-3'],
+      ['2.E5', '2.E5'],
+      ['1.\\mathrm{e}{-3}', '1.e-3'],
+      ['2.e', '2·e'],
+      ['5.{mV}', '5.{mV}'],
+      ['5.\\,\\mathrm{mV}', '5.{mV}'],
+      ['a/b.c', '[a/b]·c'],
+      ['a/b*c', '[a/b]·c'],
+      ['x./y', '[x/y]'],
+      ['x.^2', 'x^{2}'],
+    ]
+    for (const [source, read] of table) expect(pasted(source), source).toBe(read)
+  })
+
+  it('is multiplication only when pasted: a typed period is left as it is', () => {
+    expect(pasted('x.y')).toBe('x·y')
+    const typed = type('x.y')
+    expect(show(typed)).toBe('x.y‸')
+    expect(parseRow(typed.root).diagnostics.map((d) => d.message)).toEqual(['Malformed number "."'])
+  })
+
+  it('ends a sentence at a line break', () => {
+    expect(pasted('y=2.\n(x)')).toBe('y=2(x)')
+    expect(pasted('y=2.(x)')).toBe('y=2·(x)')
+  })
+
+  it('keeps numbers numbers', () => {
+    expect(json1('1.e-3')).toBe(0.001)
+    expect(json1('2.5\\cdot x')).toEqual(['Multiply', 2.5, 'x'])
+    expect(json1('x.y')).toEqual(['Multiply', 'x', 'y'])
+    expect(json1('1.2.3')).toEqual(['Multiply', 1.2, 3])
+    expect(json1('x^2.5')).toEqual(['Power', 'x', 2.5])
   })
 })
 

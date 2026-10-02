@@ -123,6 +123,22 @@ export class Workbench {
     for (let i = 0; i < times; i++) await this.page.keyboard.press(key)
   }
 
+  // Paste clipboard data of any types (text/html, text/plain, …) into the
+  // focused line: a paste event, as the browser sends for Ctrl+V. The real
+  // clipboard can't be given Word's HTML as it is (the browser sanitises it).
+  async pasteData(data: Record<string, string>): Promise<void> {
+    await this.page.evaluate((items) => {
+      const transfer = new DataTransfer()
+      for (const [type, value] of Object.entries(items)) transfer.setData(type, value)
+      const event = new ClipboardEvent('paste', {
+        clipboardData: transfer,
+        bubbles: true,
+        cancelable: true,
+      })
+      ;(document.activeElement ?? document).dispatchEvent(event)
+    }, data)
+  }
+
   // Type a sample into the focused line and check the result is exactly the
   // sample's tree (same rows, same number of atoms in each, same MathJSON).
   async enterSample(id: string, line = 0): Promise<void> {

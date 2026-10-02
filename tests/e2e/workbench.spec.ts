@@ -368,3 +368,50 @@ test.describe('constants and functions', () => {
     await expect(wb.page.locator('[data-role="mathml"]')).toContainText('<rem/>')
   })
 })
+
+test.describe('decorations', () => {
+  test('\\bar after a name puts bar in it', async () => {
+    await wb.type('q\\bar')
+    await wb.press('Space')
+    await wb.expectMathJson('q_bar')
+  })
+
+  test('\\b lists \\bar', async () => {
+    await wb.type('\\b')
+    const option = wb.page.locator('[data-role="command-list"] [data-command="bar"]')
+    await expect(option).toBeVisible()
+  })
+
+  test('the charges are not in the command list', async () => {
+    const options = wb.page.locator('[data-role="command-list"] [role="option"]')
+    for (const command of ['plus', '2plus', 'minus']) {
+      await wb.type(`\\${command}`)
+      await expect(wb.page.locator('[data-role="command"]')).toHaveText(`\\${command}`)
+      await expect(options).toHaveCount(0)
+      await wb.press('Escape')
+    }
+  })
+
+  test('each Accents, Concentration and Charges button applies its keyword', async () => {
+    const buttons: Array<[string, string]> = [
+      ['Bar', 'bar'],
+      ['Hat', 'hat'],
+      ['Tilde', 'tilde'],
+      ['Check', 'check'],
+      ['Concentration', 'conc'],
+      ['Charge +', 'plus'],
+      ['Charge 2+', '2plus'],
+      ['Charge 3+', '3plus'],
+      ['Charge −', 'minus'],
+      ['Charge 2−', '2minus'],
+    ]
+    for (const [title, keyword] of buttons) {
+      await wb.type('x')
+      await wb.tool('decorations', title)
+      await expect(wb.line(0)).toBeFocused()
+      await wb.expectMathJson(`x_${keyword}`)
+      await wb.press('Backspace', `x_${keyword}`.length)
+      await expect.poll(() => wb.mathJson()).toBeNull()
+    }
+  })
+})

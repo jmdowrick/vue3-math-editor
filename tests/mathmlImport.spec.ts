@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
-import { type EditorState, namedCommand } from '../src/editor/commands'
 import { contentMathML } from '../src/editor/exports'
 import type { Row } from '../src/editor/layout'
 import { importContentMathML, looksLikeContentMathML } from '../src/editor/mathmlImport'
 import { parseRow } from '../src/editor/parse'
-import { json, press, show, type } from './editorHelpers'
+import { json, show, type } from './editorHelpers'
+import { TYPED } from './typedEquations'
 
 const cellml = (root: Row) => contentMathML(root, { cellml: true })
 const shown = (root: Row) =>
@@ -18,35 +18,6 @@ const only = (text: string) => {
 }
 const math = (body: string) =>
   `<math xmlns="http://www.w3.org/1998/Math/MathML" xmlns:cellml="http://www.cellml.org/cellml/2.0#">${body}</math>`
-
-// Equations typed as the user would, including every kind of structure.
-const run = (name: string) => (state: EditorState) => namedCommand(name)(state)
-const TYPED: Array<[string, () => EditorState]> = [
-  ['sum and product', () => type('y=a+b*c-d')],
-  ['brackets', () => type('y=(a+b)*(c-d)')],
-  ['negation', () => type('y=-a*b+-c')],
-  ['fraction', () => press(type('y=1/(x+1)'), ' ', '+2')],
-  ['power', () => type('y=(x+1)^2')],
-  ['power of a fraction', () => press(type('y=(1/x'), ' ', ')^2')],
-  ['function power', () => type('y=sin(x)^2')],
-  ['functions', () => type('y=exp(-t)+ln(x)+log(x,2)+min(a,b,c)+rem(a,b)')],
-  ['floor and ceiling', () => type('y=floor(x)+ceil(x)')],
-  ['abs', () => type('y=|x-1|')],
-  ['numbers with units', () => type('V=0.25{mV}*x+1e-3{volt}')],
-  ['scientific', () => type('k=1.5e-08')],
-  ['greek', () => type('alpha=2*beta')],
-  [
-    'roots',
-    () => press(run('root')(press(run('sqrt')(type('y=')), 'x', ' ', '+')), '3', 'ArrowRight', 'y'),
-  ],
-  [
-    'derivative',
-    () => press(run('dd')(type('')), 'V', 'Tab', 't', 'ArrowRight', '=-(I_ion-I_stim)/C_m'),
-  ],
-  ['piecewise', () => press(run('cases')(type('y=')), '5{mV}', 'ArrowRight', 't<1{ms}&t>0')],
-  ['logic', () => type('b=(x<1)')],
-  ['constants', () => press(run('pi')(type('y=2*')), '*r+', 'x')],
-]
 
 describe('importContentMathML', () => {
   it.each(TYPED)('reads back what the editor exports: %s', (_, make) => {
