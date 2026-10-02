@@ -3648,6 +3648,7 @@ __metadata:
     "@eslint/js": "npm:^10.0.1"
     "@playwright/test": "npm:^1.63.0"
     "@primeuix/themes": "npm:^2.0.3"
+    "@primeuix/utils": "npm:^0.6.2"
     "@typescript-eslint/eslint-plugin": "npm:^8.46.3"
     "@typescript-eslint/parser": "npm:^8.46.3"
     "@vitejs/plugin-vue": "npm:^6.0.7"
