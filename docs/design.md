@@ -58,6 +58,7 @@ else drives where an edit lands.
 | `editor/history.ts` | Undo/redo, with typing grouped into steps |
 | `editor/parse.ts` | Rows → `AstNode`, with diagnostics |
 | `editor/identifiers.ts` | Which runs of characters are names, and which are functions |
+| `editor/nameScripts.ts`, `editor/names.ts` | How a name is typeset: its scripts and decorations (bar, charge, concentration); settled names, and adding a decoration (`withNameKeyword`) |
 | `editor/numbers.ts` | Which runs of characters are numbers, including scientific notation |
 | `editor/numberUnits.ts` | A number's hidden units: settling the cursor, what typing continues, tidying |
 | `editor/operators.ts` | Comparison and logical operators |
@@ -144,6 +145,52 @@ these notes cover how they are implemented.
   - The `typesetNames` prop (default on) switches this off.
   - The name, and so the exported MathML and MathJSON, is the same either way. This is
     the convention cellml-text-editor.js is to follow too.
+- **Decorations** are keyword parts of the name (`nameScripts`; the user guide has the
+  examples). After the base, the leading single-`_` parts that are keywords in strictly
+  increasing slot order make up the decoration zone: slot 0 an accent (`bar hat tilde
+  check`), slot 1 a charge (`(2-9|[1-9][0-9]+)?(plus|minus)`), slot 2 `conc`
+  (`keywordSlot`). The first part that isn't one, or is out of order, closes the zone, and
+  it and every part after it are ordinary parts, so `g_Na_bar` keeps the subscript "Na,
+  bar" and `Ca_conc_2plus` the subscript 2plus. Keywords are matched on a word's joined
+  atom values, lowercase only (`kappa_hat` is κ, _, h, a, t); the base is never one, and a
+  base that spells a function (`sin_bar`) has no zone. `NameScripts` then has optional
+  `accent`, `charge` (`count`, `sign`) and `conc`, each with its separator and text
+  ranges, and a name with only decorations has `parts: []`.
+  - **Why one-to-one.** A decoration is only a drawing: the name is plain text to the
+    identifier scan (a keyword is more letters of one run, `nameEnd`), so `parse.ts`, the
+    Content MathML and MathJSON exports, the Content MathML import and the units panel are
+    unchanged, and `<ci>q_bar_i__Glc</ci>` imports drawn decorated. But copying writes the
+    drawing (q̄ᵢ^Glc, as LaTeX or Word's MathML), and pasting has to find the name again.
+    That only works if every drawing has exactly one spelling: hence one fixed slot per
+    keyword, one order, and keywords nowhere else, so that the zone, and with it the name,
+    can be read back from the drawing.
+  - `NAME_ACCENTS` is the one table every side uses: each accent's LaTeX over one letter
+    (`bar`), drawn over a longer base (`overline`, `widehat`, `widetilde`, `widecheck`),
+    copied over a longer base (`\check`, as `\widecheck` isn't core LaTeX), the spacing
+    mark written in Word's MathML (¯ ^ ~ ˇ), and the marks read on paste (combining or
+    spacing: U+0305, U+0304, ¯, ‾ for a bar; U+0302, ^, ˆ for a hat; …). `LATEX_ACCENTS`
+    maps both LaTeX commands to the accent, and `accentForMark` a mark. `chargeWord(2,
+    '+')` is `2plus`; `chargeFromText` reads a charge as written in a superscript (`2+`,
+    `+`, `−`, `++`, `1+`), and rejects a sign first or a count of 0 (`+2`, `-1`, `0+`).
+  - `withNameKeyword(atoms, keyword)` (`editor/names.ts`) puts `_keyword` in its slot of
+    one name (`isOneName`, `editor/identifiers.ts`), keeping the name's atom ids: `q_i`
+    with bar is `q_bar_i`. It returns null for a name drawn as typed, one that already has
+    that slot or a later one (so decorations go on inside out), or where the keyword
+    wouldn't be read as that decoration. Every paste path, and the `decorateName` command,
+    builds decorated names through it.
+  - `settleNames`, `cursorInName` and `greekWord` are unchanged: decorating is drawing
+    only, and a name the caret is in or at either end of is drawn as typed, as with
+    scripts.
+  - Drawing (`typesetName` in `renderers/layoutLatex.ts`) tags every atom exactly once. A
+    one-atom base carries its accent inside its own tag, `\htmlData{atom=q}{\bar{q}}`,
+    which keeps KaTeX's skew for an italic letter; a longer base (and, with Greek names
+    off, a Greek letter spelled out) gets the wide accent round its tags. The keyword's
+    atoms are empty tags inside the base's braces, so the scripts attach to the decorated
+    base and not to an empty box. A charge's digits are tagged as themselves, the first
+    letter of plus or minus as the sign (braced, so it has no operator spacing), the rest
+    empty; outside a concentration the charge comes first in the superscript, then a comma
+    and any superscript parts. A concentration is `\left[…\right]` round the base and its
+    charge, its brackets untagged, with the scripts outside.
 - Each character is still its own atom, so the cursor, selection and Backspace work one
   character at a time inside a name.
 - Rendering: a multi-character name is drawn in `\mathit` (TeX's italic for words, so `Vm`
@@ -346,6 +393,11 @@ pastes back.
   fraction, not into the denominator.
 - The selection box and problem underlines are drawn the same way, behind the equation
   (`selectionBox`, `atomsBox`).
+- A decorated name's last atoms may paint nothing (the keyword of `x_tilde` or
+  `Ca_2plus`), so a click right of it couldn't reach its end. Each typeset name is
+  wrapped in `\htmlData{name=<first atom id>}`; `gapGeometry` skips a gap inside a name
+  that only empty atoms follow, and measures the gap at the end of a name to the wrapper's
+  right edge, which includes a concentration's brackets and the accent.
 
 ## Editing
 
@@ -367,7 +419,15 @@ grouping).
 | Backspace | Deletes the symbol before the cursor. After a structure it steps into it (or deletes it if empty). At the start of a later row it moves to the previous row; at the start of the first row it removes the structure but keeps its content (a piecewise is stepped out of instead). In an empty piece or otherwise, removes it. |
 | Delete | The mirror image of Backspace. |
 | Tab / Shift+Tab | Next / previous empty slot, wrapping. |
-| `\name` | Command mode (workbench): `frac sqrt root abs dd pow cases otherwise floor ceil`, the comparison and logic commands, the constants, function names (inserted with brackets), Greek letters; any other name is typed out as letters. |
+| `\name` | Command mode (workbench): `frac sqrt root abs dd pow cases otherwise floor ceil bar hat tilde check conc`, the comparison and logic commands, the constants, function names (inserted with brackets), Greek letters; any other name is typed out as letters. |
+
+`decorateName(keyword)` (`editor/commands.ts`) adds a decoration to the name the cursor
+is in or at the end of, or to a selection that is exactly one name, through
+`withNameKeyword`, as one undo step, with the cursor after the name; with no name there,
+or one that can't take it, it does nothing. It backs `\bar \hat \tilde \check \conc`
+(`STRUCTURE_COMMANDS`, so they are in the command list) and the toolbar's **Accents and
+charges** group (`editor/toolbar.ts`, after Symbols: Accents, Concentration, and Charges,
+x⁺ x²⁺ x³⁺ x⁻ x²⁻). Charges are buttons only, not commands.
 
 Handled by the workbench, from keys `MathField` leaves unused: Enter (new line); ↑/↓
 with no row above or below, and Alt+↑/↓ (previous/next line); Backspace in an empty line
@@ -430,8 +490,11 @@ focused, non-editable `div`, so no hidden text area is needed.
   layout atoms, for an exact paste inside the editor. `text/plain` holds readable LaTeX
   (`rowToLatexSource`) for other apps. With nothing selected, copy does nothing.
 - **Cut** is copy, then delete the selection (one undo step).
-- **Paste** prefers the editor's own format; pasted atoms get fresh ids. Otherwise it
-  reads `text/plain` with `latexToRow`, which takes LaTeX or plain typed maths:
+- **Paste** reads the first format that applies (`editor/pasteFormats.ts`, pure, so it
+  is unit-tested): the editor's own format, with fresh ids for the pasted atoms; Word's
+  equations in `text/html`; Presentation MathML text; Content MathML text; Word's linear
+  format, which can't be read (the notice says how to copy MathML from Word instead);
+  otherwise `text/plain` with `latexToRow`, which takes LaTeX or plain typed maths:
   - LaTeX: `\frac`, `\dfrac`, `^{…}`, `\sqrt`, `\sqrt[n]`, `\left( … \right)`,
     `\left| … \right|`, floor and ceiling brackets, `\frac{\mathrm{d}…}{\mathrm{d}…}` (a
     derivative), `cases`, function commands and `\operatorname`, Greek letters,
@@ -446,8 +509,41 @@ focused, non-editable `div`, so no hidden text area is needed.
   - A braced name with a superscript whose parts start with a letter is one name:
     `{g_{Kr}^{max}}` is `g_Kr__max`. This is how copying writes such a name. Any other
     `^` is a power, so `x_1^2` from elsewhere is still x_1 squared.
-  - A superscript part that starts with a digit (`k__1`) copies as `{k^{1}}` and pastes
-    back as a power.
+  - A superscript part of digits is copied upright, `{k^{\mathrm{1}}}`, and `\mathrm`
+    digits are upright digit atoms that `bracedName` takes as a part, so it pastes back
+    as `k__1`; `{x^{2}}` from elsewhere stays a power.
+  - Decorated names are copied as drawn (`typesetNameLatex`):
+    `{\bar{q}_{i}^{\mathit{Glc}}}`, `\overline{\mathit{Glc}}`, `[\mathit{Glc}]_{i}`,
+    `{\mathit{Ca}^{2+}}`, `[\mathit{Ca}^{2+}]_{i}`, braced whenever there is a
+    superscript. Reading applies the same decorations to LaTeX from elsewhere, through
+    `withNameKeyword`, and leaves anything else as it always was, since a text paste has
+    no review:
+    - an accent command (`\bar \overline \hat \widehat \tilde \widetilde \check
+      \widecheck`) over exactly one name is its accent; over anything else it is dropped.
+      A combining accent straight after a name with no scripts yet (plain `q̄`; the
+      tokenizer splits a precomposed `ā` into its letter and mark) is too, and any other
+      combining mark is dropped rather than kept as an atom;
+    - `[`, `\left[` or `\lbrack` round exactly one name is its concentration
+      (`pushSquare`); any other square brackets are round;
+    - after `^`, a braced script or a lone sign that `chargeFromText` accepts, on a name
+      that isn't a function's, is its charge (`readCharge`), and so are unbraced digits
+      then one sign followed by `] ) } _`, `\right` or the end (`Ca^2+`). `x^{-1}` stays
+      a power. `bracedName` accepts a leading charge, `{\mathit{Ca}^{2+,\mathit{max}}}`;
+    - a decorated (or braced) name is complete (`closedNames`, a WeakSet of last atoms):
+      a letter or digit straight after it is another factor, `\bar{x}y` is `x_bar·y`,
+      while `_` is still its subscript (`[Glc]_i`).
+  - A `.` is decided by `periodRole` (for `readChar` and `atStop`); the tokenizer marks a
+    token preceded by whitespace or a spacing command, and whitespace with a line break.
+    It is a full stop, dropped, when nothing of the expression follows (the end, a closer,
+    an operator character or command, `\right`, `\end`, `\\`, `&`, a line break); a
+    decimal point after a whole number when an exponent (`1.e-3`, `\mathrm{e}`) or units
+    (`5.{mV}`, `\,\mathrm{mV}`) follow; multiplication with space on either side
+    (`3 . 2`); a decimal point before a digit at the start, after an operator or after a
+    whole number (`.5`, `x+.5`, `1.5`); and otherwise multiplication (`x.y`, `x.5`, `2.x`,
+    `1.2.3` as 1.2·3). `atStop` stops an operand at a multiplying `.` as at `*`, so
+    `a/b.c` is (a/b)·c. A subscript's digits take no `.`, a superscript's one only
+    straight before a digit (`x^2.5`). Typing is unchanged: `numbers.ts` still marks
+    `1.2.3` malformed.
   - Pasting replaces the selection and leaves the cursor after the pasted atoms (one undo
     step).
 - `rowToLatexSource` and `latexToRow` round-trip every atom kind (unit-tested).
@@ -483,9 +579,125 @@ or anything was left out.
 - Tested by round trip: every kind of typed equation, exported in CellML mode and read
   back, exports identically.
 
+### Pasting from Word, and Presentation MathML
+
+Word writes maths by how it looks, so what it means has to be worked out, and some of it
+could mean two things. Three steps, each its own module:
+
+1. **Reading** into a neutral tree (`editor/mathTree.ts`): runs of text (italic or
+   upright, as written), fractions, scripts, radicals, fences, functions, tables,
+   accents, and `unsupported` nodes that name what they are ("a sum") and how they were
+   written.
+   - An `accent` node is a mark over or under its base: `{base, mark, position: 'over' |
+     'under', what}`, the mark as written (combining or spacing), `what` naming it for a
+     message ("a dot accent").
+   - A text node is `explicit` when the source wrote its style out (OMML's `m:sty` or
+     `m:nor`, MathML's `mathvariant`) rather than leaving the format's default. That flag,
+     not the style, says whether digits were meant to be upright: Word writes no style on
+     what is typed into an equation, while the editor's own Word export marks a name's
+     digit superscript.
+   - `editor/ommlReader.ts` reads Word's clipboard HTML. Each equation is OMML inside a
+     conditional comment (`<!--[if gte msEquation 12]>…<![endif]-->`), with a picture as
+     a fallback for other apps. The OMML is taken from the raw text, since an HTML
+     parser would lower-case its element names. It is tidied into XML (the tags that
+     aren't OMML removed, keeping their text; attributes quoted; HTML entities decoded)
+     and parsed, or parsed as HTML if it still isn't well-formed. Elements are matched
+     on their lower-cased local names, so either parse reads the same. A run is upright
+     with `m:sty` p or b, or `m:nor`, else italic. Each `m:oMath` is an equation, and so
+     is each line of an `m:eqArr` that makes up a whole one. `m:acc` is an accent (U+0302,
+     a hat, when it has no `m:chr`), and `m:bar` an over-bar with `pos` top, otherwise
+     (Word's default) an under-bar.
+   - `editor/presentationMathmlReader.ts` reads Presentation MathML. Word's
+     (`<mml:math …>`) also matches `looksLikeContentMathML`, so it is checked first;
+     before it was, pasting it replaced every line with empty ones. An `<mi>` is italic
+     if it is one character, else upright, unless `mathvariant` says otherwise. A
+     two-child `<mover>` or `<munder>` whose second child is one character is an accent;
+     other under- and over-scripts (large operators, `lim`) are unsupported.
+2. **Interpreting** (`editor/presentationImport.ts`, `readPresentation(paste,
+   choices)`): the tree as layout rows, the ones the user would have typed. Text is
+   split into characters and brackets written as characters are matched, so a name in
+   two runs, or brackets in separate `<mo>`s, read as one; then letters run into names
+   by the typing rules. The fixed rules are in the user guide (*Copy, paste and export*).
+   - An **assumption** is a reading that could be otherwise: a fraction of italic d's
+     (derivative or fraction), an italic e to a power (Euler's number or a variable), an
+     italic word as a name's superscript (part of the name or a power), digits as a
+     name's superscript (`digit-superscript`: a power or part of the name), and `1.5e−3`
+     as a run (number or product). Each takes the likelier meaning, the default, and can
+     be changed by reading again with `choices`, a map from an assumption's id to an
+     option's. An id is the assumption's place in the tree (`line:path:kind`), so it is
+     the same whatever is chosen. Each records the ids of the atoms it became, to mark
+     them in the review's preview.
+   - **Decorations.** In `scripts()` the base is read once, and if it is one name the
+     scripts are its parts, so `sSub(acc(q), i)`, `sSub([Glc], i)` and scripts on scripts
+     all read as names. An accent node over one name, with a bar, hat, tilde or check
+     mark, goes through `withNameKeyword`; otherwise (another mark, an under-bar, a base
+     that isn't one name) it is an omission and an empty slot, and the omissions,
+     assumptions, notes and periods recorded while reading its base are rolled back.
+     `[ ]` round one name, as characters (`bracket()`) or a fence (`fenced()`), is its
+     concentration; both return `{atoms, scripted}`. A superscript (`superscriptPart`)
+     is tried, in order, as a charge then parts (`Ca^{2+,max}`), an upright word (a
+     part), a charge (the keyword; one `chargeFromText` rejects, `0+` or `+2`, is an
+     omission), an italic word (`name-superscript`), digits, and otherwise a power. A
+     subscript that is itself a keyword where a decoration goes (`x_{bar}`) gets a note.
+   - **Digit superscripts.** Digits marked upright explicitly are a part, silently.
+     Otherwise they are a `digit-superscript` assumption, id the scripts node's path
+     (or, for Unicode superscript digits after a name, the first digit's). The default is
+     a power, except a superscript 1, which is more often a label (κ_m¹). Whether to ask
+     is decided from the tree (`canBeName`: text that is a name, an accent over one, a
+     name in square brackets, or one with scripts), not from the atoms, so the questions don't
+     change with other choices; where the base doesn't end up one name the answer is
+     applied as a power.
+   - **Higher-order derivatives.** Before a fraction's rows are read, `fraction()` checks
+     it for an order-n derivative (`derivativeOrder`): a numerator starting with a
+     differential (d, ⅆ or ∂) with superscript n, as a script or Unicode superscript
+     digits, then an expression or nothing (the operator form, dⁿ/dtⁿ (…)); a denominator
+     of a differential and one name with superscript n; n ≥ 2 and the two the same. Their
+     superscripts' paths go into `orders`, so they are powers and never asked about, and
+     the fraction is kept as it is, with an omission that names the order ("A
+     second-order derivative (d²x/dt²) isn't supported: it was kept as a fraction", or
+     "looks like" with italic d's). Mismatched orders (d²x/dt) are an ordinary fraction.
+   - **Periods** in `char()` follow the LaTeX reading's rules: an `<mn>`'s `.` is a
+     decimal point and an `<mo>`'s is `·` or a full stop; `nextFactor` counts only decimal
+     points.
+   - An **omission** is what the editor can't write: left out, as an empty bracket slot
+     where it was (or kept in a form the editor can write: a higher-order derivative as a
+     fraction; an unknown symbol as it is), with a message that becomes its line's
+     problem.
+   - **Notes** say how things were read without a choice: letters written together read
+     as one name (the names, when two or more italic letters made one), accents,
+     concentrations and charges read as parts of names (`q̄_i^(Glc) as q_bar_i__Glc`,
+     collected from the final name runs holding atoms `withNameKeyword` made), a full
+     stop read as multiplication (`x.5 as x·5`), a keyword subscript, ∂ read as d, ∞ in a
+     subscript as inf, sin⁻¹ as arcsin, a units word after a number read as a variable,
+     numbers without units, text left out. A note quotes up to 6 instances.
+3. **Reviewing and inserting** (`EquationWorkbench`). MathField emits
+   `paste-presentation`; if the reading has an assumption or an omission, the workbench
+   opens `PasteReviewDialog` for the line (kept by id), else inserts it straight away.
+   One equation goes in at the caret (`insertAtoms`, an ordinary paste); several go in
+   as new lines after the active one, the first in it if it is empty
+   (`insertLinesAfter`), as one undo step, each committed with reason `'paste'`.
+   Omissions are kept as their lines' import problems until edited, and the notice
+   gives the notes.
+   - The dialog is a PrimeVue `Dialog`, teleported to the body, so the workbench's
+     capture-phase keys never see its keys. It has `data-me-popover`, so focus moving to
+     it doesn't commit the line as a blur. It handles Escape itself and stops it, as
+     PrimeVue's own Escape listener is on the document and would close a dialog the
+     workbench is in too. The insert waits for `after-hide`: PrimeVue gives focus back
+     to the line as it closes, and inserting before that would leave the caret behind.
+   - The preview draws each equation with `rowToLatex` and marks atoms by their
+     `data-atom` ids: what was left out always, and the part an assumption or omission
+     is about while it's pointed at or focused.
+   - Assumptions are grouped by kind, each group starting with its "Read all N as" row.
+     `digit-superscript` questions come last, with the labels Powers and Labels (parts of
+     names), unlike `name-superscript`'s Parts of names and Powers.
+
+The test fixtures (`tests/wordFixtures.ts`, `tests/resources/word/`) are modelled on what
+Word for Windows puts on the clipboard. Real captures from Word (Windows and Mac, with
+the MathML option on and off) should replace them as they are made.
+
 ## Exports
 
-A "Copy as" menu in the workbench toolbar offers the three formats in `editor/exports.ts`.
+A "Copy as" menu in the workbench toolbar offers the four formats in `editor/exports.ts`.
 It copies the selection if there is one, otherwise the whole active equation. A selection
 is exported on its own: its atoms are parsed as a row of their own, so selecting `a+b` in
 `y=a+b` gives `["Add","a","b"]`, and an incomplete selection (`+b`) gets placeholders. The
@@ -503,6 +715,21 @@ if it has none). Empty lines are left out, and one line is exported as `exportRo
   `<math xmlns="http://www.w3.org/1998/Math/MathML">` and re-indented by `formatXml`, which
   keeps an element holding only text (and `<sep/>`) on one line, so no whitespace is added
   inside a `<cn>` or `<ci>`.
+- **Word equation** is Presentation MathML (`renderers/presentationMathml.ts`), which Word
+  turns into one of its equations when it is pasted as plain text (Word doesn't read
+  Content MathML). It is written from the layout rows, so that it reads back with nothing
+  to ask: names typeset with their parts (superscript parts upright, digits as
+  `<mi mathvariant="normal">1</mi>`, which reads back as explicit), decorated names as
+  drawn (an accent as `<mover accent="true">` with its spacing mark, a charge as
+  `<mn>2</mn><mo>+</mo>` first in the superscript, before a comma and any parts, and a
+  concentration as `[`…`]` fenced round the base and its charge, with the scripts
+  outside), a multi-letter name italic as the editor draws it, ⅆ for a derivative's d, an
+  upright e, `sin(x)^2` as sin²(x), scientific notation as `1.5×10^{−3}`, piecewise as `{`
+  and a table. Units are left out. Several lines are one `<math>` with a one-column table. How brackets are
+  written (`<mfenced>`, as Word's own MathML has them) and how several lines are, are
+  constants at the top of the file, to change if Word turns out to prefer the other.
+  Every typed equation (but its units) reads back with the same Content MathML
+  (unit-tested).
 
 **CellML mode.** `EquationWorkbench` takes a `cellml` prop, off by default so other
 consumers get plain Content MathML. When it is on, the Content MathML panel and "Copy as"
@@ -686,7 +913,29 @@ Findings from trying libcellml.js 0.7.1 on the editor's output:
 - A line that is only a comparison (`x < y`) isn't an equation, so libCellML checks none
   of its units.
 
+## Future work: higher-order derivatives
+
+CellML can encode them (`<diff>` with `<bvar><ci>t</ci><degree><cn>2</cn></degree></bvar>`),
+but the editor writes only first-order ones. Supporting them would mean:
+
+- an order on the derivative atom, or a degree row: `DerivativeAtom` in `editor/layout.ts`,
+  with its drawing and caret navigation;
+- `editor/parse.ts` and the `Derivative` AST node;
+- the Content MathML export (`renderers/mathml.ts`), and the import:
+  `derivative()` in `editor/mathmlImport.ts`, which rejects a degree other than 1;
+- LaTeX and Word copy and paste;
+- typing them with `\dd`.
+
+The recognition already in `fraction()` (`derivativeOrder`, in `presentationImport.ts`)
+would then make the derivative instead of an omission.
+
 ## Open questions
+
+- **What real Word does with decorated names.** Still to check in Word itself: which
+  accent characters it writes and accepts (spacing or combining); whether `\overbar` is
+  `m:bar` with `pos` top; whether `m:sty` p survives on an upright digit, so that
+  `kappa_m__1` round-trips through Word silently; and whether `<mfenced open="[">` inside
+  `<msub>` comes back as `sSub` of a `d[…]`.
 
 - **The otherwise default with an expression first.** A default 0.0 takes the units of a
   first piece that is a number with units, but not of one that is an expression, whose
