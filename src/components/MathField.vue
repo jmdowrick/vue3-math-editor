@@ -18,7 +18,9 @@
 // Copy, cut and paste use the browser's clipboard events (so the system
 // shortcuts and menus work): copying writes the selection as the editor's own
 // format plus LaTeX text; pasting reads either (editor/clipboard.ts), and
-// pasted Content MathML is handed to the parent as an `import`.
+// equations from elsewhere (editor/pasteFormats.ts) are handed to the
+// parent, which decides where they go: Content MathML as an `import`, and
+// Word's equations and Presentation MathML as a `paste-presentation`.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import katex from 'katex'
 
@@ -31,22 +33,14 @@ import {
   rowBox,
   selectionBox,
 } from '../editor/caretGeometry'
-import {
-  CLIPBOARD_MIME,
-  deserializeAtoms,
-  latexToRow,
-  rowToLatexSource,
-  serializeAtoms,
-} from '../editor/clipboard'
+import { CLIPBOARD_MIME, rowToLatexSource, serializeAtoms } from '../editor/clipboard'
 import { type EditorState, deleteBackward, insertAtoms } from '../editor/commands'
 import { type Cursor, type PickOffset, cursorAtEnd, cursorAtStart } from '../editor/cursor'
 import { type EditInfo, OTHER_EDIT } from '../editor/history'
 import { commandForKey, typedText } from '../editor/keymap'
-import {
-  type MathMLImport,
-  importContentMathML,
-  looksLikeContentMathML,
-} from '../editor/mathmlImport'
+import type { MathMLImport } from '../editor/mathmlImport'
+import { readPastedData } from '../editor/pasteFormats'
+import type { PresentationPaste } from '../editor/presentationImport'
 import { type Row, getRow } from '../editor/layout'
 import { type Mark, type MarkKind, isProblem, markKind } from '../editor/marks'
 import { isExponentSignPosition } from '../editor/numbers'
@@ -100,8 +94,12 @@ const props = withDefaults(
 const emit = defineEmits<{
   navigate: [state: NavigationState]
   edit: [state: EditorState, info: EditInfo]
-  // Content MathML was pasted (editor/mathmlImport.ts).
+  // Content MathML was pasted (editor/mathmlImport.ts), or something that
+  // couldn't be read (no equations, and the problem).
   import: [result: MathMLImport]
+  // Word's equations or Presentation MathML were pasted, to be read
+  // (editor/presentationImport.ts).
+  'paste-presentation': [paste: PresentationPaste]
 }>()
 
 const surfaceEl = ref<HTMLElement | null>(null)
@@ -471,25 +469,27 @@ function handlePaste(event: ClipboardEvent) {
   event.preventDefault()
 
   const data = event.clipboardData
-  const own = deserializeAtoms(data.getData(CLIPBOARD_MIME))
-  const text = data.getData('text/plain')
+  const pasted = readPastedData({
+    own: data.getData(CLIPBOARD_MIME),
+    html: data.getData('text/html'),
+    text: data.getData('text/plain'),
+  })
 
-  // Content MathML (from a CellML model, say) is imported; the parent decides
-  // where its equations go.
-  if (!own && looksLikeContentMathML(text)) {
-    emit(
-      'import',
-      importContentMathML(text) ?? {
-        equations: [],
-        problems: ["The pasted MathML isn't well-formed XML, so nothing was imported"],
-        lineProblems: [],
-      },
-    )
-    return
+  switch (pasted.kind) {
+    case 'atoms':
+      if (pasted.atoms.length > 0) emit('edit', insertAtoms(pasted.atoms)(state()), OTHER_EDIT)
+      return
+    // Equations from elsewhere: the parent decides where they go.
+    case 'content-mathml':
+      emit('import', pasted.result)
+      return
+    case 'presentation':
+      emit('paste-presentation', pasted.paste)
+      return
+    case 'unreadable':
+      emit('import', { equations: [], problems: [pasted.message], lineProblems: [] })
+      return
   }
-
-  const atoms = own ?? latexToRow(text)
-  if (atoms.length > 0) emit('edit', insertAtoms(atoms)(state()), OTHER_EDIT)
 }
 
 // The caret's place on the screen (client coordinates), in an empty slot too:

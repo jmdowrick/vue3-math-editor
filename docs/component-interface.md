@@ -26,7 +26,7 @@ Nothing here needs libCellML.
 | `issues` | `UnitsIssue[]` | `[]` | Units problems to show. Each is underlined in amber on its line, the line is outlined, and the status bar shows it; the message shows on hover. |
 | `variableUnits` | `Record<string, string>` | none | Each variable's units by name, shown on hover ("Vm: millivolt"). When given, numbers without units also show theirs on hover ("2: dimensionless"); numbers with units always do ("0.25: mV"). It can be large (every variable of a model), and a new object with the same entries changes nothing, so it's fine to rebuild it after every change. |
 | `greekNames` | `boolean` | `true` | Names that are Greek letters' names (`alpha`, `tau_m`) are drawn as the letters (α, τ_m), however they were typed; off, every Greek letter is spelled out (`\alpha` included). The names, and so the MathML, are the same either way. |
-| `typesetNames` | `boolean` | `true` | Each name's subscripts and superscripts are typeset. One underscore starts a subscript and two a superscript, so `g_Kr__max` is g with the subscript Kr and the superscript max. The name being edited is shown as typed. Off, every name is shown as typed. The names, and so the MathML, are the same either way. Copied LaTeX follows this setting too. |
+| `typesetNames` | `boolean` | `true` | Each name's subscripts and superscripts are typeset. One underscore starts a subscript and two a superscript, so `g_Kr__max` is g with the subscript Kr and the superscript max. Decorations are drawn too: `q_bar_i` is q̄ᵢ, `Ca_2plus` Ca²⁺ and `Glc_conc` [Glc] (see [Writing equations](writing-equations.md)). The name being edited is shown as typed. Off, every name is shown as typed. The names, and so the MathML, are the same either way. Copied LaTeX follows this setting too. |
 | `outputs` | `boolean` | `true` | The output panels (Content MathML, MathJSON, LaTeX, AST). Off, only the equation lines (and the `side` slot) show: for an application embedding the editor. |
 | `copy` | `boolean` | `outputs` | The "Copy as" menu, which can copy several lines, selected by Shift/Ctrl/Cmd+clicking their numbers. Unset, it is on when the outputs are; `:outputs="false" copy` keeps it for an editor without the output panels. |
 | `history` | `boolean` | `true` | The workbench's own undo and redo. Off, nothing is recorded, the Undo and Redo buttons are hidden, and Ctrl/Cmd+Z and Ctrl/Cmd+Y are left for the host (see [Embedding](#embedding-in-an-application)). |
@@ -126,7 +126,9 @@ interface LineCommitInfo {
     | 'new-line' // the "+ Line" button
     | 'navigate' // ↑/↓, a click to another line, or moving another line
     | 'blur'     // focus left the lines (not for the toolbar or its galleries)
-    | 'paste'    // a paste of several equations replaced every line: one each
+    | 'paste'    // a paste of several equations: one each for the lines it made
+                 // (Content MathML replaces every line; Word's go in after the
+                 // active one)
 }
 // emitted as (line: EquationLine, info: LineCommitInfo)
 ```
@@ -142,7 +144,8 @@ number (a circle for an error, a triangle for units only). Under the lines, a st
 one line high shows the active line's first problem, or else the first on any line, as
 "Line 2: Missing right-hand side", with "+3 more" if there are others; pointing at it
 lists them all, and clicking it goes to that line. It also shows what a paste did
-("Imported 3 equations…"). It is there only while it has something to say; being under
+("Imported 3 equations…", "Pasted 2 equations as new lines", how a paste from Word
+was read). It is there only while it has something to say; being under
 the lines, they don't move when it appears or goes. When problems show at all is the
 `validate` prop's choice.
 
@@ -433,9 +436,10 @@ without the output panels.
 
 The toolbar is one row of groups, as in a word processor's equation editor: Fraction,
 Power, Roots ▾, Brackets ▾ (absolute value, floor, ceiling), Functions ▾ (trigonometric,
-hyperbolic and their inverses, exp, ln, log), Derivative, Piecewise and Symbols ▾
-(operators, constants, relations, logic), then the line buttons. ▾ opens a gallery; a
-click never takes the focus from the line. The groups are defined in
+hyperbolic and their inverses, exp, ln, log), Derivative, Piecewise, Symbols ▾
+(operators, constants, relations, logic) and Accents and charges ▾ (bar, hat, tilde,
+check, concentration and charges, on the name before the caret), then the line buttons.
+▾ opens a gallery; a click never takes the focus from the line. The groups are defined in
 `src/editor/toolbar.ts`.
 
 The toolbar stays one row however narrow the workbench is: the groups that don't fit,

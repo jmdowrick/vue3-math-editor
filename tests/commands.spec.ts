@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   commandSuggestions,
+  decorateName,
   deleteBackward,
   emptyState,
   insertFraction,
@@ -11,7 +12,9 @@ import {
 import { type Cursor, isValidCursor, moveRight } from '../src/editor/cursor'
 import { commandForKey } from '../src/editor/keymap'
 import { row } from '../src/editor/layout'
+import { chargeWord } from '../src/editor/nameScripts'
 import { parseRow } from '../src/editor/parse'
+import { TOOLBAR } from '../src/editor/toolbar'
 import { json, press, show, type } from './editorHelpers'
 
 // ---------------------------------------------------------------------------
@@ -359,5 +362,105 @@ describe('command suggestions', () => {
     for (const name of names('', 1000)) {
       expect(shape(namedCommand(name)(emptyState()).root), name).not.toBe(shape(row(name)))
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Decorations: \bar, \hat, \tilde, \check, \conc and the charge buttons
+// ---------------------------------------------------------------------------
+
+describe('decorating a name', () => {
+  it('puts the keyword in the name before the caret, the caret after the name', () => {
+    const state = namedCommand('bar')(type('q'))
+    expect(show(state)).toBe('q_bar‸')
+    expect(json(state)).toBe('q_bar')
+  })
+
+  it('works on the name the caret is in, and keeps its scripts', () => {
+    const inside = press(type('x_i'), 'ArrowLeft')
+    expect(show(namedCommand('bar')(inside))).toBe('x_bar_i‸')
+    const word = press(type('Glc+1'), 'ArrowLeft', 'ArrowLeft', 'ArrowLeft')
+    expect(show(namedCommand('conc')(word))).toBe('Glc_conc‸+1')
+  })
+
+  it('puts each keyword in its slot: accent, then charge, then conc', () => {
+    // (type('Ca') would press a key named Ca.)
+    expect(show(decorateName(chargeWord(2, '+'))(type('C', 'a')))).toBe('Ca_2plus‸')
+    expect(show(namedCommand('conc')(decorateName('2plus')(type('Ca_i'))))).toBe('Ca_2plus_conc_i‸')
+    expect(show(decorateName('minus')(type('C', 'l')))).toBe('Cl_minus‸')
+    expect(show(namedCommand('hat')(type('kappa_m__GLUT2')))).toBe('kappa_hat_m__GLUT2‸')
+  })
+
+  it('decorates a selection that is exactly one name', () => {
+    const selected = press(type('a+q'), 'Shift+ArrowLeft')
+    const state = namedCommand('tilde')(selected)
+    expect(show(state)).toBe('a+q_tilde‸')
+    expect(state.anchor ?? null).toBeNull()
+  })
+
+  it('does nothing without a name there, or when the name cannot take the keyword', () => {
+    const cases = [
+      emptyState(),
+      type('2+'),
+      // The caret before a name, not in it or at its end.
+      press(type('x'), 'ArrowLeft'),
+      // Part of a name selected.
+      press(type('ab'), 'Shift+ArrowLeft'),
+      // A slot taken, or a later one.
+      type('x_bar'),
+      type('Glc_conc'),
+      // A function's name, and a name drawn as typed.
+      type('sin'),
+      type('x_bar_'),
+    ]
+    for (const state of cases) {
+      expect(namedCommand('bar')(state), show(state)).toBe(state)
+    }
+    const conc = type('Glc_conc')
+    expect(decorateName('2plus')(conc)).toBe(conc)
+  })
+
+  it('lists the accents and conc as commands, but not the charges', () => {
+    const names = (prefix: string) => commandSuggestions(prefix).map(({ name }) => name)
+    expect(names('b')).toContain('bar')
+    for (const name of ['bar', 'hat', 'tilde', 'check', 'conc']) {
+      expect(names(name)[0], name).toBe(name)
+    }
+    expect(commandSuggestions('bar')[0]).toEqual({
+      name: 'bar',
+      title: 'Bar over the name before the caret',
+      latex: '\\bar{x}',
+    })
+    expect(commandSuggestions('conc')[0].latex).toBe('[x]')
+    for (const prefix of ['plus', '2plus', 'minus', '2minus']) {
+      expect(names(prefix), prefix).toEqual([])
+    }
+  })
+
+  it('has a toolbar group after Symbols, each button applying its keyword', () => {
+    const ids = TOOLBAR.map((group) => group.id)
+    expect(ids.indexOf('decorations')).toBe(ids.indexOf('symbols') + 1)
+    const group = TOOLBAR.find((group) => group.id === 'decorations')!
+    expect(group.sections!.map((section) => section.label)).toEqual([
+      'Accents',
+      'Concentration',
+      'Charges',
+    ])
+
+    const applied = group.sections!.flatMap((section) =>
+      section.items.map((button) => [button.title, show(button.command(type('x')))]),
+    )
+    expect(applied).toEqual([
+      ['Bar over the name before the caret  ( _bar, \\bar )', 'x_bar‸'],
+      ['Hat over the name before the caret  ( _hat, \\hat )', 'x_hat‸'],
+      ['Tilde over the name before the caret  ( _tilde, \\tilde )', 'x_tilde‸'],
+      ['Check over the name before the caret  ( _check, \\check )', 'x_check‸'],
+      ['Concentration of the name before the caret  ( _conc, \\conc )', 'x_conc‸'],
+      ['Charge + on the name before the caret  ( _plus )', 'x_plus‸'],
+      ['Charge 2+ on the name before the caret  ( _2plus )', 'x_2plus‸'],
+      ['Charge 3+ on the name before the caret  ( _3plus )', 'x_3plus‸'],
+      ['Charge − on the name before the caret  ( _minus )', 'x_minus‸'],
+      ['Charge 2− on the name before the caret  ( _2minus )', 'x_2minus‸'],
+    ])
   })
 })

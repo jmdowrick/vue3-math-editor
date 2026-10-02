@@ -3,10 +3,11 @@ import { describe, expect, it } from 'vitest'
 import { latexToRow, rowToLatexSource } from '../src/editor/clipboard'
 import { describeCursor } from '../src/editor/cursor'
 import { contentMathML } from '../src/editor/exports'
-import { nameRuns } from '../src/editor/identifiers'
-import { type Row, row, symbol } from '../src/editor/layout'
+import { isOneName, nameRuns } from '../src/editor/identifiers'
+import { type Row, func, row, symbol } from '../src/editor/layout'
 import { importContentMathML } from '../src/editor/mathmlImport'
-import { nameAtoms, settleNames } from '../src/editor/names'
+import { nameAtoms, settleNames, withNameKeyword } from '../src/editor/names'
+import { nameScripts } from '../src/editor/nameScripts'
 import { parseRow } from '../src/editor/parse'
 import { rowToLatex } from '../src/renderers/layoutLatex'
 import { json, press, show, type } from './editorHelpers'
@@ -137,5 +138,113 @@ describe('reserved names', () => {
     expect(result.problems).toEqual([
       'The variable pi has a reserved name, so it reads as the constant here',
     ])
+  })
+})
+
+describe('name keywords', () => {
+  // The name with the keyword added, written as atoms(), or null.
+  const added = (name: string, keyword: string, options = {}) => {
+    const result = withNameKeyword(nameAtoms(name, options), keyword)
+    return result && atoms(result)
+  }
+
+  it('puts the keyword straight after the base', () => {
+    expect(added('q', 'bar')).toBe('q_bar')
+    expect(added('q_i', 'bar')).toBe('q_bar_i')
+    expect(added('q_i__Glc', 'bar')).toBe('q_bar_i__Glc')
+    expect(added('x__max', 'bar')).toBe('x_bar__max')
+    expect(added('Ca_i', '2plus')).toBe('Ca_2plus_i')
+    expect(added('Glc', 'conc')).toBe('Glc_conc')
+    expect(added('Glc_i', 'conc')).toBe('Glc_conc_i')
+    expect(added('Na', 'plus')).toBe('Na_plus')
+    // An ordinary part that happens to be a keyword stays where it is.
+    expect(added('g_Na_bar', 'bar')).toBe('g_bar_Na_bar')
+  })
+
+  it('after any decoration of an earlier slot', () => {
+    expect(added('q_bar', '2plus')).toBe('q_bar_2plus')
+    expect(added('q_bar_i', '2plus')).toBe('q_bar_2plus_i')
+    expect(added('Ca_2plus', 'conc')).toBe('Ca_2plus_conc')
+    expect(added('Ca_2plus_i', 'conc')).toBe('Ca_2plus_conc_i')
+    expect(added('q_bar_i', 'conc')).toBe('q_bar_conc_i')
+    expect(added('x_hat_bar', '2plus')).toBe('x_hat_2plus_bar')
+  })
+
+  it('on a Greek name, as one atom or spelled out', () => {
+    expect(added('kappa_m__GLUT2', 'hat')).toBe('[kappa]_hat_m__GLUT2')
+    expect(added('kappa_m', 'hat', { greekNames: false })).toBe('kappa_hat_m')
+    expect(added('alpha', 'tilde')).toBe('[alpha]_tilde')
+  })
+
+  it('is null when the slot, or a later one, is taken', () => {
+    expect(added('x_bar', 'hat')).toBeNull()
+    expect(added('x_bar', 'bar')).toBeNull()
+    expect(added('Glc_conc', '2plus')).toBeNull()
+    expect(added('Glc_conc_i', 'bar')).toBeNull()
+    expect(added('Ca_2plus', 'minus')).toBeNull()
+    expect(added('Ca_2plus', 'bar')).toBeNull()
+    expect(added('Ca_conc_2plus', 'conc')).toBeNull()
+  })
+
+  it('is null for a name drawn as typed', () => {
+    expect(added('x_bar_', 'conc')).toBeNull()
+    expect(added('x_', 'bar')).toBeNull()
+    expect(added('a___b', 'bar')).toBeNull()
+  })
+
+  it('is null for a word that isn’t a keyword', () => {
+    expect(added('x', 'Bar')).toBeNull()
+    expect(added('x', 'dot')).toBeNull()
+    expect(added('x', '1plus')).toBeNull()
+    expect(added('x', '')).toBeNull()
+  })
+
+  it('is null for anything but one variable name', () => {
+    expect(withNameKeyword([], 'bar')).toBeNull()
+    expect(withNameKeyword(row('x+y'), 'bar')).toBeNull()
+    expect(withNameKeyword(row('2'), 'bar')).toBeNull()
+    expect(withNameKeyword(row('sin'), 'bar')).toBeNull()
+    expect(withNameKeyword([func('sin')], 'bar')).toBeNull()
+    expect(withNameKeyword([symbol('pi')], 'hat')).toBeNull()
+    // A base that spells a function has no decorations.
+    expect(added('sin_x', 'bar')).toBeNull()
+    // A constant's name typed out is still letters.
+    expect(added('pi_m', 'hat')).toBe('pi_hat_m')
+  })
+
+  it('keeps the name’s own atoms, and adds new ones for the keyword', () => {
+    const name = nameAtoms('Ca_2plus_i')
+    const result = withNameKeyword(name, 'conc')!
+    expect(result.slice(0, 8)).toEqual(name.slice(0, 8))
+    expect(result.slice(-2)).toEqual(name.slice(-2))
+    expect(result.slice(0, 8)[0]).toBe(name[0])
+    const inserted = result.slice(8, -2)
+    expect(atoms(inserted)).toBe('_conc')
+    const ids = new Set(name.map((atom) => atom.id))
+    expect(inserted.every((atom) => !ids.has(atom.id))).toBe(true)
+    expect(new Set(result.map((atom) => atom.id)).size).toBe(result.length)
+  })
+
+  it('gives a name read with the keyword as its decoration', () => {
+    const result = withNameKeyword(nameAtoms('Ca_i'), '2plus')!
+    expect(isOneName(result)).toBe(true)
+    expect(names(result)).toEqual(['Ca_2plus_i'])
+    const values = result.map((atom) => (atom as { value: string }).value)
+    expect(nameScripts(values)?.charge).toMatchObject({ count: 2, sign: '+' })
+    expect(contentMathML(result)).toContain('<ci>Ca_2plus_i</ci>')
+  })
+})
+
+describe('isOneName', () => {
+  it('is a row that is exactly one variable name', () => {
+    expect(isOneName(row('x'))).toBe(true)
+    expect(isOneName(row('q_bar_i__Glc'))).toBe(true)
+    expect(isOneName(nameAtoms('kappa_m'))).toBe(true)
+    expect(isOneName([])).toBe(false)
+    expect(isOneName(row('x+y'))).toBe(false)
+    expect(isOneName(row('2x'))).toBe(false)
+    expect(isOneName(row('x '))).toBe(false)
+    expect(isOneName(row('sin'))).toBe(false)
+    expect(isOneName([symbol('alpha'), ...row('x')])).toBe(false)
   })
 })

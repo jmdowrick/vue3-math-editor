@@ -2,9 +2,12 @@
 // editor. A group is a button of its own (Fraction), or opens a gallery of
 // buttons (Radical ▾: √x, ⁿ√x), in sections if it has several (Symbols ▾).
 // Each button shows its LaTeX; its title names it and the keys that type it.
+// A decoration (bar, charge, …) applies to the name before the caret, and is
+// typed as a keyword part of the name (see nameScripts.ts).
 
 import {
   type Command,
+  decorateName,
   insertAbs,
   insertCeiling,
   insertDerivative,
@@ -17,6 +20,7 @@ import {
   insertSuperscript,
   insertSymbol,
 } from './commands'
+import { chargeWord } from './nameScripts'
 import { FUNCTION_REGISTRY } from '../registry/nodes'
 
 export interface ToolButton {
@@ -66,6 +70,26 @@ const functions = (suffix: '' | 'h', inverse: boolean) =>
       text[0].toUpperCase() + text.slice(1),
     )
   })
+
+// An accent's button: its title says what it applies to, and names the
+// keyword and the command.
+const accentButton = (keyword: string, title: string): ToolButton => ({
+  latex: `\\${keyword}{x}`,
+  title: `${title} over the name before the caret  ( _${keyword}, \\${keyword} )`,
+  command: decorateName(keyword),
+})
+
+// A charge's button: x²⁺ is "Charge 2+ on the name before the caret
+// ( _2plus )". Toolbar only: there is no command for a charge.
+const chargeButton = (count: number, sign: '+' | '-'): ToolButton => {
+  const keyword = chargeWord(count, sign)
+  const shown = `${count === 1 ? '' : count}${sign}`
+  return {
+    latex: `x^{${shown}}`,
+    title: `Charge ${shown.replace('-', '−')} on the name before the caret  ( _${keyword} )`,
+    command: decorateName(keyword),
+  }
+}
 
 export const TOOLBAR: readonly ToolGroup[] = [
   { id: 'fraction', title: 'Fraction  ( / )', latex: '\\frac{a}{b}', command: insertFraction },
@@ -189,6 +213,42 @@ export const TOOLBAR: readonly ToolGroup[] = [
           { latex: '\\lor', title: 'Or  ( \\or )', command: insertSymbol('∨') },
           { latex: '\\lnot', title: 'Not  ( ! or \\not )', command: insertSymbol('¬') },
           { latex: '\\veebar', title: 'Exclusive or  ( \\xor )', command: insertSymbol('⊻') },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'decorations',
+    title: 'Accents and charges',
+    latex: '\\bar{x}',
+    sections: [
+      {
+        label: 'Accents',
+        items: [
+          accentButton('bar', 'Bar'),
+          accentButton('hat', 'Hat'),
+          accentButton('tilde', 'Tilde'),
+          accentButton('check', 'Check'),
+        ],
+      },
+      {
+        label: 'Concentration',
+        items: [
+          {
+            latex: '[x]',
+            title: 'Concentration of the name before the caret  ( _conc, \\conc )',
+            command: decorateName('conc'),
+          },
+        ],
+      },
+      {
+        label: 'Charges',
+        items: [
+          chargeButton(1, '+'),
+          chargeButton(2, '+'),
+          chargeButton(3, '+'),
+          chargeButton(1, '-'),
+          chargeButton(2, '-'),
         ],
       },
     ],

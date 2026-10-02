@@ -72,6 +72,23 @@ test('copies as LaTeX, which pastes back', async () => {
   await expect.poll(() => wb.shape(1)).toEqual(shape)
 })
 
+// Decorated names go out as they are drawn (an accent, a charge, square
+// brackets) and read back as the same names, with nothing to ask.
+test('copies decorated names as a Word equation, which pastes back the same', async () => {
+  await wb.type('q_bar_i__Glc=Ca_2plus_conc_i')
+  const expected = ['Equal', 'q_bar_i__Glc', 'Ca_2plus_conc_i']
+  await wb.expectMathJson(expected)
+  await copyAs('Word equation')
+  await expect.poll(readClipboard).toMatch(/^<math xmlns="http:\/\/www.w3.org\/1998\/Math\/MathML"/)
+
+  await wb.press('End')
+  await wb.press('Enter')
+  await wb.press('ControlOrMeta+v')
+  await expect(wb.page.locator('[data-role="paste-review"]')).toHaveCount(0)
+  await expect(wb.lines()).toHaveCount(2)
+  await wb.expectMathJson(expected)
+})
+
 test('with a selection, copies just the selection and keeps it selected', async () => {
   await wb.type('y=a+b')
   await wb.press('Shift+ArrowLeft', 3)

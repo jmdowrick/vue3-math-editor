@@ -125,8 +125,27 @@ export function gapGeometry(
   while (a < row.length && !drawn(row[a]) && row[a].kind === 'units') a++
   const before = row[b]
   const after = row[a]
-  const beforeBox = atomBounds(container, before)
+  let beforeBox = atomBounds(container, before)
   const afterBox = atomBounds(container, after)
+
+  // A typeset name's keywords paint nothing (x_tilde is drawn x̃, the tilde
+  // tagged as the x), so a gap inside a name that only empty atoms follow is
+  // the same place as the gap at its end. Skip it, so a click right of the
+  // name reaches the end. And at the end, measure to the whole name's right
+  // edge: its wrapper (layoutLatex.ts typesetName) includes the brackets of a
+  // concentration and the accent.
+  const name = before && atomElement(container, before)?.closest('[data-name]')
+  if (name) {
+    const inName = (atom: Atom | undefined) =>
+      !!atom && atomElement(container, atom)?.closest('[data-name]') === name
+    if (!inName(after)) {
+      beforeBox ??= paintedBounds(name)
+    } else if (beforeBox && !afterBox) {
+      let next = a
+      while (inName(row[next]) && !atomBounds(container, row[next])) next++
+      if (!inName(row[next])) return null
+    }
+  }
 
   let x: number
   if (beforeBox && afterBox) x = (beforeBox.right + afterBox.left) / 2

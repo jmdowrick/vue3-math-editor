@@ -50,7 +50,9 @@ a denominator, and a root has a body and, for an nth root, an index.
 ## Numbers
 
 A run of digits, with at most one decimal point, is one number: `12`, `3.5`, `.5`.
-Something like `1.2.3` is reported as a malformed number under the equation.
+Something like `1.2.3` is reported as a malformed number under the equation. (Pasted, a
+`.` that can't be a decimal point is read as multiplication instead: see *Copy, paste and
+export*.)
 
 ### Units of a number
 
@@ -167,14 +169,72 @@ typing or editing it, it is shown exactly as typed, underscores included, so you
 where the caret is. A name with three or more underscores in a row, or one that ends with
 an underscore, is always shown as typed.
 
-A superscript that starts with a digit (`k__1`) looks like a power, so avoid it.
+A superscript of digits (`k__1`) is drawn like a power, k¹, but it is still part of the
+name. Copied as LaTeX or as a Word equation, the editor marks its digits upright, so it
+pastes back as the name `k__1`, not k to the power 1.
 
 This only changes how a name looks. The name itself is exported exactly as typed:
 `"g_Kr__max"` in MathJSON, `<ci>g_Kr__max</ci>` in Content MathML. That is a valid CellML
 name, so it is stored in the model unchanged. A name can't start with an underscore; a
 stray `_` is reported under the equation. The workbench's `typesetNames` option (see
 [component-interface.md](component-interface.md)) turns typesetting off, so that every
-name is shown as typed.
+name is shown as typed, decorations included.
+
+### Decorations, charges and concentrations
+
+A bar, hat, tilde or check over a symbol, a charge, and the square brackets of a
+concentration are written as words in the name, since a CellML name can only hold
+letters, digits and underscores (the same idea as `alpha` drawn as α). **Rule:** straight
+after the name's first word, `_` and a keyword decorate it: first an accent (`bar`,
+`hat`, `tilde`, `check`), then a charge (`plus` or `minus`, with a count of 2 or more
+before it: `2plus`, `3minus`), then `conc`. Each comes at most once, in that order. The
+first part that isn't one of them, or is out of order, ends the decorations: it and every
+part after it are ordinary subscripts and superscripts, keyword or not.
+
+| You type | Shown as |
+|---|---|
+| `x_bar`, `x_hat`, `x_tilde`, `x_check` | x̄, x̂, x̃, x̌ |
+| `Glc_bar` | Glc with a wide bar over it |
+| `q_bar_i__Glc` | q̄ with the subscript i and the superscript Glc |
+| `kappa_hat_m__GLUT2` | κ̂ with the subscript m and the superscript GLUT2 |
+| `Na_plus`, `Cl_minus`, `Ca_2plus` | Na⁺, Cl⁻, Ca²⁺ |
+| `Glc_conc_i` | [Glc] with the subscript i |
+| `Ca_2plus_conc_i` | [Ca²⁺] with the subscript i |
+| `g_bar_Na` | ḡ with the subscript Na |
+| `g_Na_bar` | g with the subscript "Na, bar" (`bar` isn't straight after g) |
+| `Ca_conc_2plus` | [Ca] with the subscript 2plus (a charge goes before `conc`) |
+| `x__bar` | x with the superscript bar (keywords take one underscore) |
+
+Keywords are lowercase (`x_Bar` is x with the subscript Bar), `1plus` isn't a charge
+(write `plus`), and a name that is a function's spelling isn't decorated (`sin_bar` is
+sin with the subscript bar).
+
+**Why so strict:** each drawing has exactly one spelling. A decorated name copied as LaTeX
+or as a Word equation, and pasted back, is the same name; and a q̄ᵢ pasted from elsewhere
+has only one name it can be, `q_bar_i`.
+
+As with scripts, a decorated name is shown as typed while the caret is in it or at either
+end, and decorated once the caret leaves. The name itself, and so the export, is exactly
+what you typed: `<ci>Ca_2plus_conc_i</ci>`.
+
+To add a decoration without typing the keyword, put the caret in or at the end of the name
+(or select the name) and use a `\` command, `\bar`, `\hat`, `\tilde`, `\check` or `\conc`,
+or a button in the toolbar's **Accents and charges** gallery (Accents, Concentration, and
+Charges: x⁺, x²⁺, x³⁺, x⁻, x²⁻). Charges are toolbar buttons only, not commands. The
+keyword goes in its place, so with the caret after `q_i`, `\bar` gives `q_bar_i`, and the
+caret goes after the name. Nothing happens if there is no name there, or if it already has
+that decoration or a later one: decorations go on in order, so add a charge before
+`conc`.
+
+Typing `[` does nothing: for [Glc], type `Glc_conc` or use the Concentration button.
+Brackets that only group are round.
+
+**Names from before:** a name that already used a keyword in this place is now drawn
+decorated, though the name itself is unchanged: `k_plus` is k⁺, not k with the subscript
+plus, and `Ca_conc` is [Ca]. To keep the word as a subscript, put it after another part
+(`k_f_plus` is k with the subscript "f, plus"). A digit superscript such as `k__1` is
+drawn as before, but copies as `{k^{\mathrm{1}}}` (it used to copy as `{k^{1}}`, which
+pasted back as a power).
 
 ## Functions
 
@@ -501,14 +561,52 @@ With a selection:
   the way it is shown: `\mathit{Vm}_{\mathit{init}}`, with a multi-character part in
   `\mathit` so LaTeX treats it as one word. A name with a superscript is put in braces,
   `{g_{\mathit{Kr}}^{\mathit{max}}}`, so that pasting it back gives the name rather than a
-  power.
+  power; digits in a name's superscript are upright for the same reason,
+  `{k^{\mathrm{1}}}`. A decorated name is written as it is drawn:
+  `{\bar{q}_{i}^{\mathit{Glc}}}`, `\overline{\mathit{Glc}}`, `{\mathit{Ca}^{2+}}`,
+  `[\mathit{Glc}]_{i}`, and pastes back as the same name.
 - Pasting text from elsewhere accepts **LaTeX** (`\frac{1}{2}`, `\sqrt{x}`,
   `\left|x\right|`, …) or **plain maths as you would type it** (`y = (x+1)/2 + sin(x)^2`),
   read with the same rules as typing. In pasted text, `a/b` always makes a fraction,
   and a LaTeX subscript becomes part of the name: `x_{12}` becomes the name `x_12`, and
   `C_{Ca,i}` becomes `C_Ca_i`. A LaTeX superscript is a power, unless the name and its
-  superscript are in braces with the superscript starting with a letter:
-  `{g_{Kr}^{max}}` becomes the name `g_Kr__max`, while `x_1^2` stays x_1 squared.
+  superscript are in braces with the superscript starting with a letter (or upright
+  digits, `{k^{\mathrm{1}}}`): `{g_{Kr}^{max}}` becomes the name `g_Kr__max`, while
+  `x_1^2` stays x_1 squared.
+- Pasted text is also read for **decorations**, by the rules of *Decorations, charges and
+  concentrations* above. There is no review for pasted text, so these are applied without
+  a note, and anything that doesn't fit is read as it always was:
+  - An accent command over one name is its accent: `\bar{q}_i` is `q_bar_i`, and
+    `\overline{Glc}`, `\hat{\kappa}_m`, `\tilde`, `\widetilde`, `\check` and
+    `\widecheck` work the same way. Over anything else (`\bar{x+y}`) the accent is
+    dropped.
+  - So is a plain Unicode accent on a letter, as text has it: `q̄` (q and a combining
+    macron) is `q_bar`, and so is a letter with its accent as one character (`ā` is
+    `a_bar`). A macron or overline is a bar, a circumflex a hat, and a caron a check. Any
+    other combining mark, such as a dot, is dropped.
+  - Square brackets round one name are its concentration: `[Glc]_i`, `\left[Glc\right]_i`
+    and `\lbrack Glc\rbrack_i` are `Glc_conc_i`. Other square brackets (`[x+y]`) are
+    round ones.
+  - A charge as a name's superscript is its charge: `Ca^{2+}`, `Ca^2+` and `Cl^-` are
+    `Ca_2plus` and `Cl_minus`, and `[Ca^{2+}]_i` is `Ca_2plus_conc_i`. A sign before a
+    number (`x^{-1}`) is still a power.
+  - A letter straight after a decorated name is another factor: `\bar{x}y` is
+    `x_bar·y`, and `[Glc]_i x` is `Glc_conc_i·x`.
+- A pasted `.` is a **decimal point** only within a number; between two factors it is
+  **multiplication**, and with nothing after it a full stop, left out. (Typing a `.` is
+  unchanged.)
+
+  | Pasted | Read as |
+  |---|---|
+  | `1.5`, `.5`, `x+.5` | numbers, as typed |
+  | `x.y`, `[Glc]_i.[Glc]_o` | x·y, `Glc_conc_i`·`Glc_conc_o` |
+  | `x.5`, `2.x` | x·5, 2·x |
+  | `3 . 2`, `1. 5` | 3·2, 1·5 (a space either side makes it multiplication) |
+  | `1.2.3` | 1.2·3 |
+  | `x^2.5`, `x^2.y` | x to the power 2.5, x²·y |
+  | `a/b.c` | (a/b)·c, as `a/b*c` |
+  | `y=x.`, `x./y` | y=x, x/y (a full stop) |
+  | `1.e-3`, `5.{mV}` | the number 1.e-3; 5. with the units mV |
 - Pasting **Content MathML** (from a CellML model, say: a `<math>` element, or a bare
   `<apply>`) imports it. One equation or expression goes in at the caret like any paste;
   several (a `<math>` holding several `<apply><eq/>…`) **replace every line**, one
@@ -519,9 +617,72 @@ With a selection:
   Units panel. Anything the editor can't write (an element outside CellML's MathML, a
   second derivative) is left out, leaving an empty slot or a missing operand, and the
   equation's problem says what was left out until you change it.
+- Pasting **equations from Word** (copied from Word's equation editor, in Word's
+  desktop app) reads them as you would have typed them. Word writes maths by how it
+  looks, so most of what it means follows from fixed rules:
+  - Letters written together are **one name**, as when typing: Word's `Cm` is the
+    variable `Cm`, not C × m. A note lists the names this made; put `*` between letters
+    you meant as a product.
+  - A name's subscripts, and upright superscripts, are parts of it: `I_ion`,
+    `C_{Ca,i}` is `C_Ca_i`, and `n_∞` is `n_inf`.
+  - A bar, hat, tilde or check over a name, square brackets round one, and a charge as
+    its superscript are its decorations (see *Decorations, charges and concentrations*):
+    q̄ᵢ^Glc is `q_bar_i__Glc`, κ̂ₘ^GLUT2 is `kappa_hat_m__GLUT2`, [Glc]ᵢ is `Glc_conc_i`,
+    and [Ca²⁺]ᵢ is `Ca_2plus_conc_i`. A note lists each name read this way. A subscript
+    that is itself a keyword, `x_{bar}`, becomes `x_bar`, which is drawn x̄; a note says
+    so.
+  - A full stop between two factors is multiplication, by the rules for pasted text
+    above (`[Glc]_i.[Glc]_o`); a note lists them.
+  - Word's differential d (`\dd`, ⅆ), or an upright d, makes `dV/dt` a derivative, and
+    `d/dt (x+y)` the derivative of `x+y`. A partial derivative ∂ is read as an ordinary
+    one, as CellML has no others.
+  - `1.5×10^{−3}` is the number `1.5e-3`; Greek letters, π, ∞, an upright e, and
+    functions (`sin x`, `sin²x`, `log_b x`, `sin⁻¹x` as arcsin) are the editor's.
+  - Brackets, absolute values, roots, fractions and a brace round lines of cases
+    (a piecewise definition) are what they look like.
+- When something from Word could mean two things, a **paste review** asks first, and
+  shows the equations as they'll be pasted. It asks about:
+  - a fraction with italic d's, `dV/dt`: a derivative, or the fraction of `dV` and `dt`?
+  - an italic e raised to a power: Euler's number, or a variable called e?
+  - an italic word as a name's superscript, `g^{max}`: part of the name, or a power?
+  - `1.5e−3` written as text: the number, or 1.5 × e − 3?
+  - digits as a name's superscript, `n^4` or `κ_m^1`: a power, or part of the name (a
+    label, `kappa_m__1`)? A power is the default, except for a superscript 1, which is
+    more often a label. Word writes every digit you type the same way, so this is asked
+    of each one, even of `x^2` copied from the editor as a Word equation and pasted back.
+    Digits the editor wrote as part of a name (marked upright) aren't asked about, nor
+    are the superscripts of a higher-order derivative (below).
+
+  Choose for each one (or for all of a kind at once); the preview follows. **Paste**
+  (Enter) pastes them; **Cancel** or Esc pastes nothing.
+- What the editor can't write is **always listed**: sums, integrals, accents other than a
+  bar, hat, tilde or check over a name (V̇, an under-bar, a bar over `x+y`), limits,
+  matrices, prime notation (V′), a charge that can't be a name's (`Ca^{0+}`, `Ca^{+2}`),
+  a subscript that can't be part of a name (`x_{i+1}`), a higher-order derivative, and
+  functions of your own. Each is left out, with an empty slot where it was, and the review
+  opens to say so even when there's nothing to choose. A higher-order derivative,
+  `d²x/dt²` or `ⅆ³V/ⅆt³`, is kept as the fraction it looks like, its superscripts
+  powers; with italic d's the review says it only looks like one. After pasting, the line
+  shows the problem until you change it.
+- One equation from Word goes in at the caret; **several go in as new lines** after the
+  one you're on (an empty line takes the first), keeping the lines you have. Ctrl/Cmd+Z
+  undoes the paste in one step. Text around the equations is left out.
+- Pasted numbers come **without units**: add each number's units afterwards, by typing `{`
+  after it.
+- If what arrives is only Word's text form of an equation (its "linear format"), the
+  editor says so. In Word, open **Equation Options** and turn on **Copy MathML to the
+  clipboard as plain text**, then copy the equation again.
+- Pasting **Presentation MathML**, as other apps write maths (and as Word does with that
+  option on), is read the same way.
 - **Copy as** in the toolbar copies the selection, or the whole equation, as **LaTeX**,
-  **MathJSON** or **Content MathML**. A selection is exported on its own, so selecting
-  `a+b` in `y=a+b` gives just `a+b`.
+  **MathJSON**, **Content MathML** or a **Word equation**. A selection is exported on its
+  own, so selecting `a+b` in `y=a+b` gives just `a+b`.
+- **Copy as → Word equation** copies MathML that Word turns into one of its equations
+  when you paste it into a document; several lines become one equation with a line each.
+  A derivative uses Word's differential d, so it pastes back into the editor as a
+  derivative. A decorated name is written as it is drawn (q̄ᵢ^Glc, [Glc]ᵢ, Ca²⁺), and a
+  digit in a name's superscript is marked upright, so names paste back as the same names
+  with nothing to ask. Units are left out, as on screen.
 - To copy several lines, select them by their numbers: **Shift+click** a line's number
   selects the lines from the one you're on to it, and **Ctrl/Cmd+click** adds or removes
   one. Copy as then gives one document: Content MathML is one `<math>` with an equation
@@ -554,6 +715,7 @@ takes exactly what you typed, and Esc cancels. You can also click a command in t
 | `\pi`, `\e`, `\inf`, `\nan`, `\true`, `\false` | a constant (see *Constants*) |
 | `\cases` (or `\piecewise`), `\otherwise` | a piecewise definition, or its otherwise |
 | `\floor`, `\ceil` | ⌊☐⌋, ⌈☐⌉ |
+| `\bar`, `\hat`, `\tilde`, `\check`, `\conc` | the decoration on the name before the caret (see *Decorations, charges and concentrations*) |
 | anything else | the name typed out as letters (`\speed` gives `speed`) |
 
 ## Not supported yet
@@ -561,5 +723,10 @@ takes exactly what you typed, and Esc cancels. You can also click a command in t
 - **Declaring your own functions**, so that `f(x)` is a function call rather than f × x.
 - **Chained comparisons** such as `a < b < c`: join them with ∧ instead.
 - **Integrals, sums, products, limits and matrices.**
+- **Higher-order derivatives** such as d²x/dt². CellML can hold them, but the editor
+  writes only first-order derivatives, and a Content MathML one is left out. Pasted from
+  Word, one is recognised, kept as the fraction it looks like, and listed in the review.
 - **Typing a Greek letter's name without a backslash** to get the letter.
-- **Pasting several lines as several equations.** Pasted text all goes into one equation.
+- **Pasting several lines of text as several equations.** Pasted text (LaTeX or typed
+  maths) all goes into one equation; equations from Word, and several in Content MathML,
+  do become lines.

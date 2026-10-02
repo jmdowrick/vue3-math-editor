@@ -12,7 +12,8 @@
 // ("pi", "infinity") is reserved: it is the constant. The underscore is part
 // of the name. It separates the name's words, so a Greek letter can be one
 // (α_m, names.ts), and marks its subscripts and superscripts (g_Kr__max,
-// nameScripts.ts).
+// nameScripts.ts). A decoration (q_bar, Ca_2plus, Glc_conc) is just more
+// letters of the same name; only its drawing changes (nameScripts.ts).
 //
 // Each character stays its own atom, so the cursor moves through a name one
 // character at a time; the grouping is worked out here, when parsing and
@@ -129,6 +130,18 @@ export function nameRuns(row: Row): NameRun[] {
   }
 
   return runs
+}
+
+// Whether a row is exactly one name (not a function's): what a pasted accent,
+// bracket or charge can decorate.
+export function isOneName(atoms: Row): boolean {
+  const runs = nameRuns(atoms)
+  return (
+    runs.length === 1 &&
+    runs[0].start === 0 &&
+    runs[0].end === atoms.length &&
+    !runs[0].functionName
+  )
 }
 
 // Every number in a row, left to right. Digits inside a name ("x2") are not
