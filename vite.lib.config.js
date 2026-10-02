@@ -4,9 +4,9 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
 // The library build (yarn build:lib): src/index.ts as an ES module in dist/,
-// with the components' styles in dist/style.css. Vue, PrimeVue and KaTeX are
-// peer dependencies, left for the host to provide. The demo builds with
-// vite.config.js instead, into dist-demo/.
+// with the components' styles in dist/style.css. Vue, PrimeVue (and its
+// @primeuix/utils) and KaTeX are peer dependencies, left for the host to
+// provide. The demo builds with vite.config.js instead, into dist-demo/.
 export default defineConfig({
   plugins: [
     vue({
@@ -34,7 +34,7 @@ export default defineConfig({
       cssFileName: 'style',
     },
     rolldownOptions: {
-      external: ['vue', 'katex', /^primevue(\/|$)/],
+      external: ['vue', 'katex', /^primevue(\/|$)/, /^@primeuix\/utils(\/|$)/],
     },
   },
 })
