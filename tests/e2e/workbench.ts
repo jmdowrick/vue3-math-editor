@@ -271,11 +271,17 @@ export class Workbench {
   }
 
   // Click at a fraction of the way across (fx) and down (fy) a box,
-  // optionally holding Shift.
-  async clickIn(box: Box, fx: number, fy = 0.5, { shift = false } = {}): Promise<void> {
+  // optionally holding Shift or other modifier keys ('Control', 'Meta', 'Alt').
+  async clickIn(
+    box: Box,
+    fx: number,
+    fy = 0.5,
+    { shift = false, modifiers = [] as string[] } = {},
+  ): Promise<void> {
     const { x, y } = this.pointIn(box, fx, fy)
-    if (shift) await this.page.keyboard.down('Shift')
+    const keys = shift ? ['Shift', ...modifiers] : modifiers
+    for (const key of keys) await this.page.keyboard.down(key)
     await this.page.mouse.click(x, y)
-    if (shift) await this.page.keyboard.up('Shift')
+    for (const key of keys.reverse()) await this.page.keyboard.up(key)
   }
 }

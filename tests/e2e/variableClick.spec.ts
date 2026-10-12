@@ -77,8 +77,11 @@ test('numbers, operators and function names report nothing', async () => {
   expect((await clicked())[0].name).toBe('z')
 })
 
-test('a Shift+click, a double click or a drag reports nothing more', async () => {
+test('a click with a modifier, a double click or a drag reports nothing more', async () => {
   await wb.clickIn(await glyph(1, 'y'), 0.5, 0.5, { shift: true })
+  for (const key of ['Control', 'Meta', 'Alt']) {
+    await wb.clickIn(await glyph(1, 'y'), 0.5, 0.5, { modifiers: [key] })
+  }
 
   // The first click of a double click is a click; the second is not.
   const { x, y } = centre(await glyph(0, 'z'))
@@ -93,4 +96,14 @@ test('a Shift+click, a double click or a drag reports nothing more', async () =>
 
   await wb.settle()
   expect(await clicked()).toEqual([{ name: 'z', lineId: await lineId(0) }])
+})
+
+test('a few pixels of movement while pressed is still a click, and selects nothing', async () => {
+  const { x, y } = centre(await glyph(0, 'z'))
+  await wb.page.mouse.move(x, y)
+  await wb.page.mouse.down()
+  await wb.page.mouse.move(x + 3, y + 1, { steps: 3 })
+  await wb.page.mouse.up()
+  await expect.poll(clicked).toEqual([{ name: 'z', lineId: await lineId(0) }])
+  await expect(wb.selection()).toHaveCount(0)
 })

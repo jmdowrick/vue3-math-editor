@@ -128,7 +128,8 @@ function loadExample() {
 
 // For the browser tests: window.__workbench.lines is the latest
 // equations-change payload, sources each event's source, commits every
-// line-commit and variableClicks every variable-click; setUnits({ issues, variableUnits }) sets them; setMathML(xml) loads lines.
+// line-commit and variableClicks every variable-click; setUnits({ issues,
+// variableUnits }) sets them; setMathML(xml) loads lines.
 Object.assign(window, {
   __workbench: {
     get lines() {

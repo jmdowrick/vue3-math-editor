@@ -5,7 +5,7 @@ import { variableAtAtom } from '../src/editor/identifiers'
 import { type Row, childRows, row, symbol } from '../src/editor/layout'
 import { settleNames } from '../src/editor/names'
 import { parseRow } from '../src/editor/parse'
-import { equationLine } from '../src/editor/units'
+import { equationLine, unitsIssueMarks } from '../src/editor/units'
 import { KATEX_EDITOR_OPTIONS, rowToLatex } from '../src/renderers/layoutLatex'
 import { type } from './editorHelpers'
 
@@ -70,6 +70,28 @@ describe('variableAtAtom', () => {
       .filter(Boolean)
     expect(named).toEqual(['y', 'x', 'e'])
     expect(variables(root)).toEqual(['y', 'x', 'e'])
+  })
+
+  it('a number in scientific notation is not underlined for a units issue on e', () => {
+    const root = settled('y=1e-3+e')
+    const marks = unitsIssueMarks(root, [
+      { lineId: 'line-1', message: 'e has no units', variables: ['e'] },
+    ])
+    const text = new Map(allAtoms(root).map(({ id, text }) => [id, text]))
+    // Only the variable e, not the e of 1e-3.
+    expect(marks.map((mark) => mark.atomIds.map((id) => text.get(id)))).toEqual([['e']])
+    expect(marks[0].atomIds).toEqual([root[root.length - 1].id])
+  })
+
+  it("names the variables of a line with problems, as the line's variables have them", () => {
+    for (const keys of ['V_m=', 'V_m=(g_K*', 'V_m=g_K**2']) {
+      const root = settled(keys)
+      const names = new Set(allAtoms(root).map(({ id }) => variableAtAtom(root, id)))
+      names.delete(null)
+      expect(parseRow(root).diagnostics.length).toBeGreaterThan(0)
+      expect([...names]).toEqual(variables(root))
+    }
+    expect(variables(settled('V_m=(g_K*'))).toEqual(['V_m', 'g_K'])
   })
 
   it('finds names inside structures: fractions, exponents, derivatives', () => {

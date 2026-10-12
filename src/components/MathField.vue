@@ -287,6 +287,8 @@ onBeforeUnmount(() => {
   document.removeEventListener('copy', handleCopy)
   document.removeEventListener('cut', handleCut)
   document.removeEventListener('paste', handlePaste)
+  // A press still down is no click: the field is going.
+  clickedAtom = null
   stopDrag()
 })
 
@@ -409,6 +411,11 @@ function editInfo(event: KeyboardEvent, current: EditorState): EditInfo {
 // ---------------------------------------------------------------------------
 
 let dragAnchor: Cursor | null = null
+// Where the button went down, until the pointer moves further than
+// DRAG_THRESHOLD from it: until then a press is a click, not a drag, so a
+// pixel of jitter neither selects nor cancels the click.
+let pressPoint: { x: number; y: number } | null = null
+const DRAG_THRESHOLD = 4
 // The atom a plain click started on, until the button is released: then it
 // is the click's `atom-click`, unless the pointer selected something on the
 // way.
@@ -452,6 +459,7 @@ function handleMousedown(event: MouseEvent) {
   clickedAtom = plainClick(event) ? atomAt(event) : null
 
   const current = state()
+  pressPoint = { x: event.clientX, y: event.clientY }
   dragAnchor = event.shiftKey ? (current.anchor ?? current.cursor) : hit
   navigate(selectBetween(current, dragAnchor, hit))
 
@@ -461,6 +469,11 @@ function handleMousedown(event: MouseEvent) {
 
 function handleDragMove(event: MouseEvent) {
   if (!dragAnchor) return
+  if (pressPoint) {
+    const moved = Math.hypot(event.clientX - pressPoint.x, event.clientY - pressPoint.y)
+    if (moved <= DRAG_THRESHOLD) return
+    pressPoint = null
+  }
   const hit = cursorAt(event)
   if (!hit) return
   // Selecting, not clicking.
@@ -470,6 +483,7 @@ function handleDragMove(event: MouseEvent) {
 
 function stopDrag() {
   dragAnchor = null
+  pressPoint = null
   window.removeEventListener('mousemove', handleDragMove)
   window.removeEventListener('mouseup', stopDrag)
 
