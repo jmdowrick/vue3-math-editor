@@ -10,6 +10,7 @@ import type {
   EquationsChangeInfo,
   LineCommitInfo,
   UnitsIssue,
+  VariableClick,
   VariableUnits,
 } from './editor/units'
 import { type UnitsDefinition, newUnitsFile } from './units/definitions'
@@ -56,6 +57,12 @@ function handleEquationsChange(current: EquationLine[], info: EquationsChangeInf
 const commits: Array<{ id: string; mathml: string; complete: boolean; reason: string }> = []
 function handleLineCommit(line: EquationLine, info: LineCommitInfo) {
   commits.push({ id: line.id, mathml: line.mathml, complete: line.complete, reason: info.reason })
+}
+
+// Each variable-click event, in order (for the browser tests).
+const variableClicks: VariableClick[] = []
+function handleVariableClick(click: VariableClick) {
+  variableClicks.push(click)
 }
 const sources = ref<UnitsSource[]>([])
 const variableUnits = ref<VariableUnits>({})
@@ -120,8 +127,8 @@ function loadExample() {
 }
 
 // For the browser tests: window.__workbench.lines is the latest
-// equations-change payload, and sources each event's source;
-// setUnits({ issues, variableUnits }) sets them; setMathML(xml) loads lines.
+// equations-change payload, sources each event's source, commits every
+// line-commit and variableClicks every variable-click; setUnits({ issues, variableUnits }) sets them; setMathML(xml) loads lines.
 Object.assign(window, {
   __workbench: {
     get lines() {
@@ -132,6 +139,9 @@ Object.assign(window, {
     },
     get commits() {
       return commits
+    },
+    get variableClicks() {
+      return variableClicks
     },
     setMathML(xml: string): MathMLImport | undefined {
       return workbench.value?.setMathML(xml)
@@ -180,6 +190,7 @@ Object.assign(window, {
         :variable-units="hintUnits"
         @equations-change="handleEquationsChange"
         @line-commit="handleLineCommit"
+        @variable-click="handleVariableClick"
       >
         <template #side>
           <UnitsPanel

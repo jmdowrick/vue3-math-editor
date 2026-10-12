@@ -798,6 +798,10 @@ described for users of the component in [Component interface](component-interfac
   the variables it uses (from the AST), the units names its numbers use, and whether it
   is complete (no parse problems, no placeholders). Lines are cached by row, so moving
   the cursor neither recomputes nor re-emits.
+- **Clicks out.** MathField reports the atom a plain click landed on (`atom-click`: the
+  innermost `[data-atom]`, or a typeset name's `[data-name]`, read at mousedown before
+  the redraw), and the workbench emits `variable-click` with the variable that atom is
+  part of (`variableAtAtom`, from `nameOccurrenceMap`), if the line's `variables` have it.
 - **Issues in.** The `issues` prop gives problems by line id and variable names (and
   optionally numbers, by value). `unitsIssueMarks` finds every occurrence with
   `nameOccurrenceMap` / `numberOccurrences` and makes `units` marks; the workbench adds

@@ -221,10 +221,18 @@ export function nameOccurrenceMap(root: Row): ReadonlyMap<string, readonly strin
 
   const visit = (row: Row) => {
     const runs = new Map(nameRuns(row).map((run) => [run.start, run]))
+    // A number is skipped whole, so the "e" of "1e-08" isn't a name.
+    const numbers = new Map(numberRuns(row).map((run) => [run.start, run]))
 
     for (let i = 0; i < row.length; i++) {
       const atom = row[i]
       const run = runs.get(i)
+
+      const number = numbers.get(i)
+      if (number) {
+        i = number.end - 1
+        continue
+      }
 
       if (run) {
         if (!run.functionName) {
@@ -250,6 +258,28 @@ export function nameOccurrenceMap(root: Row): ReadonlyMap<string, readonly strin
   visit(root)
   occurrenceCache.set(root, found)
   return found
+}
+
+// The variable name an atom is part of, or null if it isn't part of one (a
+// number, units, an operator, a function's name, a constant, a structure).
+// The name is spelled as the parser spells the variable: alpha_m, g_Kr__max.
+// For a click on a name (the workbench's `variable-click`). Cached by row,
+// like nameOccurrenceMap.
+const atomNameCache = new WeakMap<Row, ReadonlyMap<string, string>>()
+
+export function variableAtAtom(root: Row, atomId: string): string | null {
+  let names = atomNameCache.get(root)
+  if (!names) {
+    const map = new Map<string, string>()
+    for (const [name, occurrences] of nameOccurrenceMap(root)) {
+      // Typed out, "pi" is still the constant.
+      if (reservedConstant(name)) continue
+      for (const atomIds of occurrences) for (const id of atomIds) map.set(id, name)
+    }
+    atomNameCache.set(root, map)
+    names = map
+  }
+  return names.get(atomId) ?? null
 }
 
 export interface NumberOccurrence {

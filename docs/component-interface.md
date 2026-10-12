@@ -15,6 +15,7 @@ Nothing here needs libCellML.
   :variable-units="variableUnits"
   @equations-change="lines = $event"
   @line-commit="(line) => save(line)"
+  @variable-click="({ name }) => plot(name)"
 />
 ```
 
@@ -135,6 +136,23 @@ interface LineCommitInfo {
 
 A host that validates or stores lines can do it on `line-commit` rather than on every
 `equations-change`: typically, store `line.mathml` when `line.complete`.
+
+`variable-click` is emitted when the user clicks a variable's name in a line, so a host
+can act on that variable (show it, plot it):
+
+```ts
+interface VariableClick {
+  name: string   // spelled as in the line's `variables`: alpha_m, g_Kr__max
+  lineId: string // the line's `id`
+}
+// emitted as (click: VariableClick)
+```
+
+Any part of the name will do, typeset or not: a click on the Kr of g<sub>Kr</sub><sup>max</sup>
+is `g_Kr__max`. Only a plain primary click is reported: not one with Shift, Ctrl, Cmd or
+Alt held, not the second click of a double click (the first is reported), and not one that
+ends a drag selecting something. Clicks on numbers, units, operators, constants and function
+names report nothing. The click places the caret as usual; the event only reports it.
 
 ### Problems and the status bar
 
