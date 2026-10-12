@@ -45,6 +45,13 @@ export interface LineCommitInfo {
   reason: 'enter' | 'new-line' | 'navigate' | 'blur' | 'paste'
 }
 
+// A variable clicked in a line (the variable-click event): its name, spelled
+// as in the line's `variables`, and the line's id.
+export interface VariableClick {
+  name: string
+  lineId: string
+}
+
 // A units problem to show on a line.
 export interface UnitsIssue {
   lineId: string

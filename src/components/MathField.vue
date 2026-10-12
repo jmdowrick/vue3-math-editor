@@ -21,6 +21,10 @@
 // equations from elsewhere (editor/pasteFormats.ts) are handed to the
 // parent, which decides where they go: Content MathML as an `import`, and
 // Word's equations and Presentation MathML as a `paste-presentation`.
+//
+// A plain click (no modifier keys, not a double click or a drag) also emits
+// `atom-click` with the id of the atom it landed on, for the parent to tell
+// whether it was a name (the workbench's `variable-click`).
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import katex from 'katex'
 
@@ -35,7 +39,13 @@ import {
 } from '../editor/caretGeometry'
 import { CLIPBOARD_MIME, rowToLatexSource, serializeAtoms } from '../editor/clipboard'
 import { type EditorState, deleteBackward, insertAtoms } from '../editor/commands'
-import { type Cursor, type PickOffset, cursorAtEnd, cursorAtStart } from '../editor/cursor'
+import {
+  type Cursor,
+  type PickOffset,
+  cursorAtEnd,
+  cursorAtStart,
+  cursorsEqual,
+} from '../editor/cursor'
 import { type EditInfo, OTHER_EDIT } from '../editor/history'
 import { commandForKey, typedText } from '../editor/keymap'
 import type { MathMLImport } from '../editor/mathmlImport'
@@ -100,6 +110,9 @@ const emit = defineEmits<{
   // Word's equations or Presentation MathML were pasted, to be read
   // (editor/presentationImport.ts).
   'paste-presentation': [paste: PresentationPaste]
+  // A plain click ended on this atom (see handleMousedown); a click on a
+  // typeset name gives its first atom.
+  'atom-click': [atomId: string]
 }>()
 
 const surfaceEl = ref<HTMLElement | null>(null)
@@ -274,6 +287,8 @@ onBeforeUnmount(() => {
   document.removeEventListener('copy', handleCopy)
   document.removeEventListener('cut', handleCut)
   document.removeEventListener('paste', handlePaste)
+  // A press still down is no click: the field is going.
+  clickedAtom = null
   stopDrag()
 })
 
@@ -396,6 +411,32 @@ function editInfo(event: KeyboardEvent, current: EditorState): EditInfo {
 // ---------------------------------------------------------------------------
 
 let dragAnchor: Cursor | null = null
+// Where the button went down, until the pointer moves further than
+// DRAG_THRESHOLD from it: until then a press is a click, not a drag, so a
+// pixel of jitter neither selects nor cancels the click.
+let pressPoint: { x: number; y: number } | null = null
+const DRAG_THRESHOLD = 4
+// The atom a plain click started on, until the button is released: then it
+// is the click's `atom-click`, unless the pointer selected something on the
+// way.
+let clickedAtom: string | null = null
+
+// The atom under the pointer, as drawn: the innermost tagged atom, or a
+// typeset name (its first atom), whose decorations and gaps carry no atom.
+function atomAt(event: MouseEvent): string | null {
+  const target = event.target instanceof Element ? event.target : null
+  const el = target?.closest<HTMLElement>('[data-atom], [data-name]')
+  if (!el || !surfaceEl.value?.contains(el)) return null
+  return el.dataset.atom ?? el.dataset.name ?? null
+}
+
+const plainClick = (event: MouseEvent) =>
+  event.button === 0 &&
+  event.detail <= 1 &&
+  !event.shiftKey &&
+  !event.ctrlKey &&
+  !event.metaKey &&
+  !event.altKey
 
 function cursorAt(event: MouseEvent): Cursor | null {
   const container = surfaceEl.value
@@ -413,7 +454,12 @@ function handleMousedown(event: MouseEvent) {
 
   surfaceEl.value?.focus()
 
+  // Read before navigating, which redraws: a name the caret goes into is
+  // drawn as typed.
+  clickedAtom = plainClick(event) ? atomAt(event) : null
+
   const current = state()
+  pressPoint = { x: event.clientX, y: event.clientY }
   dragAnchor = event.shiftKey ? (current.anchor ?? current.cursor) : hit
   navigate(selectBetween(current, dragAnchor, hit))
 
@@ -423,14 +469,27 @@ function handleMousedown(event: MouseEvent) {
 
 function handleDragMove(event: MouseEvent) {
   if (!dragAnchor) return
+  if (pressPoint) {
+    const moved = Math.hypot(event.clientX - pressPoint.x, event.clientY - pressPoint.y)
+    if (moved <= DRAG_THRESHOLD) return
+    pressPoint = null
+  }
   const hit = cursorAt(event)
-  if (hit) navigate(selectBetween(state(), dragAnchor, hit))
+  if (!hit) return
+  // Selecting, not clicking.
+  if (!cursorsEqual(hit, dragAnchor)) clickedAtom = null
+  navigate(selectBetween(state(), dragAnchor, hit))
 }
 
 function stopDrag() {
   dragAnchor = null
+  pressPoint = null
   window.removeEventListener('mousemove', handleDragMove)
   window.removeEventListener('mouseup', stopDrag)
+
+  const atomId = clickedAtom
+  clickedAtom = null
+  if (atomId) emit('atom-click', atomId)
 }
 
 // ---------------------------------------------------------------------------

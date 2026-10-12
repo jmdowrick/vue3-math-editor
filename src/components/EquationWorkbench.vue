@@ -31,6 +31,9 @@
 //   MathML (a new document: no undo back past it), and focus the editor.
 // - `line-commit` event: a line finished with (Enter, a new line, moving to
 //   another line, focus leaving the editor), if it changed since last time.
+// - `variable-click` event: a plain click on a variable's name, with the name
+//   (as in the line's `variables`) and the line's id. The click places the
+//   caret as usual.
 // - `validate` prop: 'input' (default) marks problems as the user types,
 //   except what is only missing on the line being typed; 'commit' marks a
 //   line's problems once it is committed.
@@ -70,11 +73,13 @@ import {
   exportRows,
 } from '../editor/exports'
 import { type EditInfo, History, OTHER_EDIT, undoGroup } from '../editor/history'
+import { variableAtAtom } from '../editor/identifiers'
 import {
   type EquationLine,
   type EquationsChangeInfo,
   type LineCommitInfo,
   type UnitsIssue,
+  type VariableClick,
   type VariableUnits,
   equationLine,
   unitsHintMarks,
@@ -148,6 +153,7 @@ const props = withDefaults(
 const emit = defineEmits<{
   'equations-change': [lines: EquationLine[], info: EquationsChangeInfo]
   'line-commit': [line: EquationLine, info: LineCommitInfo]
+  'variable-click': [click: VariableClick]
 }>()
 
 const exportOptions = computed(() => ({
@@ -1170,6 +1176,18 @@ watch(
   { immediate: true },
 )
 
+// A click on a line's atom: `variable-click` if it was part of a variable's
+// name. The name is checked against the line's variables, so a host gets only
+// names it was told about (not a name the parser couldn't read as one).
+function handleAtomClick(index: number, atomId: string) {
+  const root = equations.value[index]?.root
+  const line = lines.value[index]
+  const name = root ? variableAtAtom(root, atomId) : null
+  if (name && line?.variables.includes(name)) {
+    emit('variable-click', { name, lineId: line.id })
+  }
+}
+
 const ast = computed(() => parsed.value?.ast ?? null)
 // The same LaTeX as copying and "Copy as LaTeX" produce.
 const latex = computed(() =>
@@ -1554,6 +1572,7 @@ function toggleCopyMenu(event: Event) {
               @edit="(state, info) => handleEdit(index, state, info)"
               @import="handleImport(index, $event)"
               @paste-presentation="handlePresentationPaste(index, $event)"
+              @atom-click="handleAtomClick(index, $event)"
             />
           </div>
         </div>

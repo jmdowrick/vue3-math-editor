@@ -15,6 +15,7 @@ Nothing here needs libCellML.
   :variable-units="variableUnits"
   @equations-change="lines = $event"
   @line-commit="(line) => save(line)"
+  @variable-click="({ name }) => plot(name)"
 />
 ```
 
@@ -31,7 +32,7 @@ Nothing here needs libCellML.
 | `copy` | `boolean` | `outputs` | The "Copy as" menu, which can copy several lines, selected by Shift/Ctrl/Cmd+clicking their numbers. Unset, it is on when the outputs are; `:outputs="false" copy` keeps it for an editor without the output panels. |
 | `history` | `boolean` | `true` | The workbench's own undo and redo. Off, nothing is recorded, the Undo and Redo buttons are hidden, and Ctrl/Cmd+Z and Ctrl/Cmd+Y are left for the host (see [Embedding](#embedding-in-an-application)). |
 | `validate` | `'input' \| 'commit'` | `'input'` | When a line's problems are shown (see [Problems](#problems-and-the-status-bar)). `'input'`: as the user types, except what is only missing (`x+`, an empty slot), which waits until the line is left. `'commit'`: once the line is committed (`line-commit`); while it is edited again, they are hidden until the next commit. |
-| `readonly` | `boolean` | `false` | The lines are shown but can't be edited: the toolbar is disabled, and typing, Enter, pasting and undo do nothing. `setMathML` still sets the lines. |
+| `readonly` | `boolean` | `false` | The lines are shown but can't be edited: the toolbar is disabled, and typing, Enter, pasting and undo do nothing. `setMathML` still sets the lines, and clicks still emit `variable-click`. |
 | `autofocus` | `boolean` | `false` | The active line has the `autofocus` attribute, so a dialog's focus management (PrimeVue `Dialog` focuses the first `[autofocus]` once it has opened) puts the caret there; it is also focused when the workbench is mounted. |
 | `debug` | `boolean` | `false` | Show the cursor and selection readout under the lines ("Cursor: 0.den @ 1"). |
 
@@ -135,6 +136,25 @@ interface LineCommitInfo {
 
 A host that validates or stores lines can do it on `line-commit` rather than on every
 `equations-change`: typically, store `line.mathml` when `line.complete`.
+
+`variable-click` is emitted when the user clicks a variable's name in a line, so a host
+can act on that variable (show it, plot it):
+
+```ts
+interface VariableClick {
+  name: string   // spelled as in the line's `variables`: alpha_m, g_Kr__max
+  lineId: string // the line's `id`
+}
+// emitted as (click: VariableClick)
+```
+
+Any part of the name will do, typeset or not: a click on the Kr of g<sub>Kr</sub><sup>max</sup>
+is `g_Kr__max`. Only a plain primary click is reported: not one with Shift, Ctrl, Cmd or
+Alt held, not the second click of a double click (the first is reported), and not one that
+ends a drag selecting something (a few pixels of movement is still a click). Clicks on
+numbers, units, operators, constants and function names report nothing. A line with
+problems (`V_m = (g_K*`) still reports the variables it has, and a `readonly` workbench
+still reports clicks. The click places the caret as usual; the event only reports it.
 
 ### Problems and the status bar
 

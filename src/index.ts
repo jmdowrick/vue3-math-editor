@@ -11,6 +11,7 @@ export type {
   EquationsChangeInfo,
   LineCommitInfo,
   UnitsIssue,
+  VariableClick,
   VariableUnits,
 } from './editor/units'
 
